@@ -22,7 +22,7 @@ pids
 .env
 .env.local
 .env.*.local
-
+settings.local.json
 # IDE
 .vscode/
 .idea/
