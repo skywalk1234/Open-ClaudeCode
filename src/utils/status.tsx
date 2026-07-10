@@ -11,7 +11,7 @@ import { getDisplayPath } from './file.js';
 import { formatNumber } from './format.js';
 import { getIdeClientName, type IDEExtensionInstallationStatus, isJetBrainsIde, toIDEDisplayName } from './ide.js';
 import { getClaudeAiUserDefaultModelDescription, modelDisplayString } from './model/model.js';
-import { getAPIProvider } from './model/providers.js';
+import { getAPIProvider, getMiniMaxEndpoint } from './model/providers.js';
 import { getMTLSConfig } from './mtls.js';
 import { checkInstall } from './nativeInstaller/index.js';
 import { getProxyUrl } from './proxy.js';
@@ -244,7 +244,8 @@ export function buildAPIProviderProperties(): Property[] {
     const providerLabel = {
       bedrock: 'AWS Bedrock',
       vertex: 'Google Vertex AI',
-      foundry: 'Microsoft Foundry'
+      foundry: 'Microsoft Foundry',
+      minimax: 'MiniMax'
     }[apiProvider];
     properties.push({
       label: 'API provider',
@@ -320,6 +321,16 @@ export function buildAPIProviderProperties(): Property[] {
         value: 'Microsoft Foundry auth skipped'
       });
     }
+  } else if (apiProvider === 'minimax') {
+    const endpoint = getMiniMaxEndpoint();
+    properties.push({
+      label: 'MiniMax region',
+      value: endpoint.region
+    });
+    properties.push({
+      label: 'MiniMax Anthropic base URL',
+      value: process.env.ANTHROPIC_BASE_URL ?? endpoint.anthropicBaseUrl
+    });
   }
   const proxyUrl = getProxyUrl();
   if (proxyUrl) {

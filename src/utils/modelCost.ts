@@ -22,12 +22,13 @@ import {
   getDefaultMainLoopModelSetting,
   type ModelShortName,
 } from './model/model.js'
+import { MINIMAX_MODELS } from './model/providers.js'
 
 // @see https://platform.claude.com/docs/en/about-claude/pricing
 export type ModelCosts = {
   inputTokens: number
   outputTokens: number
-  promptCacheWriteTokens: number
+  promptCacheWriteTokens: number | null
   promptCacheReadTokens: number
   webSearchRequests: number
 }
@@ -86,6 +87,26 @@ export const COST_HAIKU_45 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+const MINIMAX_M3_COST = {
+  inputTokens: MINIMAX_MODELS[0].pricingUsdPerMillionTokens.input,
+  outputTokens: MINIMAX_MODELS[0].pricingUsdPerMillionTokens.output,
+  promptCacheWriteTokens:
+    MINIMAX_MODELS[0].pricingUsdPerMillionTokens.cacheWrite,
+  promptCacheReadTokens:
+    MINIMAX_MODELS[0].pricingUsdPerMillionTokens.cacheRead,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
+const MINIMAX_M27_COST = {
+  inputTokens: MINIMAX_MODELS[1].pricingUsdPerMillionTokens.input,
+  outputTokens: MINIMAX_MODELS[1].pricingUsdPerMillionTokens.output,
+  promptCacheWriteTokens:
+    MINIMAX_MODELS[1].pricingUsdPerMillionTokens.cacheWrite,
+  promptCacheReadTokens:
+    MINIMAX_MODELS[1].pricingUsdPerMillionTokens.cacheRead,
+  webSearchRequests: 0,
+} as const satisfies ModelCosts
+
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /**
@@ -123,6 +144,8 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_5_25,
   [firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)]:
     COST_TIER_5_25,
+  [MINIMAX_MODELS[0].modelId.toLowerCase()]: MINIMAX_M3_COST,
+  [MINIMAX_MODELS[1].modelId.toLowerCase()]: MINIMAX_M27_COST,
 }
 
 /**
@@ -135,7 +158,7 @@ function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
     ((usage.cache_read_input_tokens ?? 0) / 1_000_000) *
       modelCosts.promptCacheReadTokens +
     ((usage.cache_creation_input_tokens ?? 0) / 1_000_000) *
-      modelCosts.promptCacheWriteTokens +
+      (modelCosts.promptCacheWriteTokens ?? 0) +
     (usage.server_tool_use?.web_search_requests ?? 0) *
       modelCosts.webSearchRequests
   )

@@ -1,7 +1,72 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
 import { isEnvTruthy } from '../envUtils.js'
 
-export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry'
+export const MINIMAX_MODELS = [
+  {
+    modelId: 'MiniMax-M3',
+    contextWindow: 1_000_000,
+    pricingUsdPerMillionTokens: {
+      input: 0.6,
+      output: 2.4,
+      cacheRead: 0.12,
+      cacheWrite: null,
+    },
+    inputModalities: ['text', 'image', 'video'],
+    thinking: ['adaptive', 'disabled'],
+  },
+  {
+    modelId: 'MiniMax-M2.7',
+    contextWindow: 204_800,
+    pricingUsdPerMillionTokens: {
+      input: 0.3,
+      output: 1.2,
+      cacheRead: 0.06,
+      cacheWrite: 0.375,
+    },
+    inputModalities: ['text'],
+    thinking: ['always_on'],
+  },
+] as const
+
+export const MINIMAX_ENDPOINTS = [
+  {
+    region: 'global_en',
+    openAIBaseUrl: 'https://api.minimax.io/v1',
+    anthropicBaseUrl: 'https://api.minimax.io/anthropic/v1',
+    docsRoot: 'https://platform.minimax.io/docs',
+  },
+  {
+    region: 'cn_zh',
+    openAIBaseUrl: 'https://api.minimaxi.com/v1',
+    anthropicBaseUrl: 'https://api.minimaxi.com/anthropic/v1',
+    docsRoot: 'https://platform.minimaxi.com/docs',
+  },
+] as const
+
+export type MiniMaxRegion = (typeof MINIMAX_ENDPOINTS)[number]['region']
+
+export function getMiniMaxEndpoint(
+  region = process.env.MINIMAX_API_REGION,
+): (typeof MINIMAX_ENDPOINTS)[number] {
+  return (
+    MINIMAX_ENDPOINTS.find(endpoint => endpoint.region === region) ??
+    MINIMAX_ENDPOINTS[0]
+  )
+}
+
+export function getMiniMaxModel(modelId: string) {
+  const normalizedModelId = modelId.toLowerCase()
+  return MINIMAX_MODELS.find(
+    model => model.modelId.toLowerCase() === normalizedModelId,
+  )
+}
+
+export type APIProvider =
+  | 'firstParty'
+  | 'bedrock'
+  | 'vertex'
+  | 'foundry'
+  | 'minimax'
 
 export function getAPIProvider(): APIProvider {
   return isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
@@ -10,7 +75,9 @@ export function getAPIProvider(): APIProvider {
       ? 'vertex'
       : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
         ? 'foundry'
-        : 'firstParty'
+        : isEnvTruthy(process.env.CLAUDE_CODE_USE_MINIMAX)
+          ? 'minimax'
+          : 'firstParty'
 }
 
 export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS {
