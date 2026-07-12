@@ -236,8 +236,8 @@ node package/cli.js --settings settings.json --model MiniMax-M2.7
 
 | Region | Anthropic-compatible base URL | OpenAI-compatible base URL | Documentation |
 | --- | --- | --- | --- |
-| `global_en` | `https://api.minimax.io/anthropic/v1` | `https://api.minimax.io/v1` | `https://platform.minimax.io/docs` |
-| `cn_zh` | `https://api.minimaxi.com/anthropic/v1` | `https://api.minimaxi.com/v1` | `https://platform.minimaxi.com/docs` |
+| `global_en` | `https://api.minimax.io/anthropic` | `https://api.minimax.io/v1` | `https://platform.minimax.io/docs` |
+| `cn_zh` | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `https://platform.minimaxi.com/docs` |
 
 `ANTHROPIC_BASE_URL` can still override the selected Anthropic-compatible endpoint for a custom deployment.
 

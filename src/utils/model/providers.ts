@@ -32,13 +32,13 @@ export const MINIMAX_ENDPOINTS = [
   {
     region: 'global_en',
     openAIBaseUrl: 'https://api.minimax.io/v1',
-    anthropicBaseUrl: 'https://api.minimax.io/anthropic/v1',
+    anthropicBaseUrl: 'https://api.minimax.io/anthropic',
     docsRoot: 'https://platform.minimax.io/docs',
   },
   {
     region: 'cn_zh',
     openAIBaseUrl: 'https://api.minimaxi.com/v1',
-    anthropicBaseUrl: 'https://api.minimaxi.com/anthropic/v1',
+    anthropicBaseUrl: 'https://api.minimaxi.com/anthropic',
     docsRoot: 'https://platform.minimaxi.com/docs',
   },
 ] as const

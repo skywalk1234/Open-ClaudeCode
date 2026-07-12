@@ -238,8 +238,8 @@ node package/cli.js --settings settings.json --model MiniMax-M2.7
 
 | 区域 | Anthropic 兼容 Base URL | OpenAI 兼容 Base URL | 文档 |
 | --- | --- | --- | --- |
-| `global_en` | `https://api.minimax.io/anthropic/v1` | `https://api.minimax.io/v1` | `https://platform.minimax.io/docs` |
-| `cn_zh` | `https://api.minimaxi.com/anthropic/v1` | `https://api.minimaxi.com/v1` | `https://platform.minimaxi.com/docs` |
+| `global_en` | `https://api.minimax.io/anthropic` | `https://api.minimax.io/v1` | `https://platform.minimax.io/docs` |
+| `cn_zh` | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `https://platform.minimaxi.com/docs` |
 
 如果使用自定义部署，仍可通过 `ANTHROPIC_BASE_URL` 覆盖当前选中的 Anthropic 兼容端点。
 
