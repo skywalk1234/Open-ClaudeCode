@@ -270,10 +270,13 @@ function getMiniMaxOption(
   model: (typeof MINIMAX_MODELS)[number],
 ): ModelOption {
   const pricing = model.pricingUsdPerMillionTokens
+  const pricingLabel = model.pricingTiersUsdPerMillionTokens.length
+    ? `standard pricing from $${pricing.input}/$${pricing.output} per Mtok`
+    : `$${pricing.input}/$${pricing.output} per Mtok`
   return {
     value: model.modelId,
     label: model.modelId,
-    description: `${model.contextWindow.toLocaleString()} token context · $${pricing.input}/$${pricing.output} per Mtok`,
+    description: `${model.contextWindow.toLocaleString()} token context · ${pricingLabel}`,
     descriptionForModel: `${model.modelId} (${model.contextWindow.toLocaleString()} token context)`,
   }
 }

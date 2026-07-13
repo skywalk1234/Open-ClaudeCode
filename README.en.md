@@ -241,6 +241,8 @@ node package/cli.js --settings settings.json --model MiniMax-M2.7
 
 `ANTHROPIC_BASE_URL` can still override the selected Anthropic-compatible endpoint for a custom deployment.
 
+This client sends Anthropic Messages requests directly. To use one of the OpenAI-compatible endpoints above, configure [Universal-AI-Protocol-Bridge](https://github.com/LING71671/Universal-AI-Protocol-Bridge) with that OpenAI base URL, then point `ANTHROPIC_BASE_URL` at the bridge's Anthropic-compatible listener. Do not pass an OpenAI `/v1` URL directly as `ANTHROPIC_BASE_URL`.
+
 ### 🔑 Configure Your Own API (Third-party Proxy / Custom Endpoint)
 
 If you use third-party API proxy services or have custom endpoints:

@@ -308,7 +308,7 @@ export async function getAnthropicClient({
     ...(getAPIProvider() === 'minimax'
       ? {
           baseURL:
-            process.env.ANTHROPIC_BASE_URL ??
+            process.env.ANTHROPIC_BASE_URL ||
             getMiniMaxEndpoint().anthropicBaseUrl,
         }
       : process.env.USER_TYPE === 'ant' &&

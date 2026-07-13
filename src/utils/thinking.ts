@@ -2,7 +2,7 @@
 import type { Theme } from './theme.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
-import { getCanonicalName } from './model/model.js'
+import { getCanonicalName, getMainLoopModel } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getAPIProvider, getMiniMaxModel } from './model/providers.js'
 import { getSettingsWithErrors } from './settings/settings.js'
@@ -113,6 +113,10 @@ export function modelSupportsThinking(model: string): boolean {
   return canonical.includes('sonnet-4') || canonical.includes('opus-4')
 }
 
+export function modelAlwaysUsesThinking(model: string): boolean {
+  return getMiniMaxModel(model)?.defaultThinking === 'always_on'
+}
+
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports adaptive thinking.
 export function modelSupportsAdaptiveThinking(model: string): boolean {
   const miniMaxModel = getMiniMaxModel(model)
@@ -159,6 +163,14 @@ export function shouldEnableThinkingByDefault(): boolean {
   const { settings } = getSettingsWithErrors()
   if (settings.alwaysThinkingEnabled === false) {
     return false
+  }
+  if (settings.alwaysThinkingEnabled === true) {
+    return true
+  }
+
+  const miniMaxModel = getMiniMaxModel(getMainLoopModel())
+  if (miniMaxModel) {
+    return miniMaxModel.defaultThinking !== 'disabled'
   }
 
   // IMPORTANT: Do not change default thinking enabled value without notifying

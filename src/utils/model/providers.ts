@@ -1,18 +1,74 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
 import { isEnvTruthy } from '../envUtils.js'
 
+export type MiniMaxPricing = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number | null
+}
+
+type MiniMaxPricingTier = {
+  serviceTier: 'standard' | 'priority'
+  maxInputTokens: number | null
+  pricing: MiniMaxPricing
+}
+
 export const MINIMAX_MODELS = [
   {
     modelId: 'MiniMax-M3',
     contextWindow: 1_000_000,
     pricingUsdPerMillionTokens: {
-      input: 0.6,
-      output: 2.4,
-      cacheRead: 0.12,
+      input: 0.3,
+      output: 1.2,
+      cacheRead: 0.06,
       cacheWrite: null,
     },
+    pricingTiersUsdPerMillionTokens: [
+      {
+        serviceTier: 'standard',
+        maxInputTokens: 512_000,
+        pricing: {
+          input: 0.3,
+          output: 1.2,
+          cacheRead: 0.06,
+          cacheWrite: null,
+        },
+      },
+      {
+        serviceTier: 'standard',
+        maxInputTokens: null,
+        pricing: {
+          input: 0.6,
+          output: 2.4,
+          cacheRead: 0.12,
+          cacheWrite: null,
+        },
+      },
+      {
+        serviceTier: 'priority',
+        maxInputTokens: 512_000,
+        pricing: {
+          input: 0.45,
+          output: 1.8,
+          cacheRead: 0.09,
+          cacheWrite: null,
+        },
+      },
+      {
+        serviceTier: 'priority',
+        maxInputTokens: null,
+        pricing: {
+          input: 0.9,
+          output: 3.6,
+          cacheRead: 0.18,
+          cacheWrite: null,
+        },
+      },
+    ],
     inputModalities: ['text', 'image', 'video'],
     thinking: ['adaptive', 'disabled'],
+    defaultThinking: 'disabled',
   },
   {
     modelId: 'MiniMax-M2.7',
@@ -23,8 +79,10 @@ export const MINIMAX_MODELS = [
       cacheRead: 0.06,
       cacheWrite: 0.375,
     },
+    pricingTiersUsdPerMillionTokens: [],
     inputModalities: ['text'],
     thinking: ['always_on'],
+    defaultThinking: 'always_on',
   },
 ] as const
 
@@ -59,6 +117,29 @@ export function getMiniMaxModel(modelId: string) {
   return MINIMAX_MODELS.find(
     model => model.modelId.toLowerCase() === normalizedModelId,
   )
+}
+
+export function getMiniMaxPricing(
+  modelId: string,
+  totalInputTokens = 0,
+  serviceTier: string | null | undefined = 'standard',
+): MiniMaxPricing | undefined {
+  const model = getMiniMaxModel(modelId)
+  if (!model) {
+    return undefined
+  }
+
+  const normalizedServiceTier =
+    serviceTier === 'priority' ? 'priority' : 'standard'
+  const pricingTiers: readonly MiniMaxPricingTier[] =
+    model.pricingTiersUsdPerMillionTokens
+  const pricingTier = pricingTiers.find(
+    tier =>
+      tier.serviceTier === normalizedServiceTier &&
+      (tier.maxInputTokens === null || totalInputTokens <= tier.maxInputTokens),
+  )
+
+  return pricingTier?.pricing ?? model.pricingUsdPerMillionTokens
 }
 
 export type APIProvider =

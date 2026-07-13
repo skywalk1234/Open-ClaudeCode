@@ -89,7 +89,7 @@ Open-ClaudeCode/
 - **API 密钥**（任选一种）：
   - 🔵 **Anthropic 官方 API** — 在 [console.anthropic.com](https://console.anthropic.com/) 注册获取 API Key
   - 🟢 **第三方代理** — 国内用户推荐，获取代理地址和 API Key
-  > ⚠️ MiniMax 的 Anthropic 兼容端点可以直接使用；仅提供 OpenAI 格式的端点仍需要协议转换。
+  > ⚠️ **OpenAI 格式代理**（如 MiniMax、OpenRouter 等）请使用 [Universal-AI-Protocol-Bridge](https://github.com/LING71671/Universal-AI-Protocol-Bridge) 进行协议转换
   - 🔴 **Claude 订阅账号** — 运行后通过 OAuth 登录（需科学上网）
 
 ### 第一步：克隆并运行
@@ -214,34 +214,6 @@ node package/cli.js -r <session-id>
 ---
 
 ## ⚙️ 常用配置
-
-### 配置 MiniMax
-
-MiniMax 已加入内置 provider registry。默认区域为 `global_en`；中国区端点请使用 `cn_zh`。
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_USE_MINIMAX": "1",
-    "MINIMAX_API_REGION": "cn_zh",
-    "ANTHROPIC_AUTH_TOKEN": "your-minimax-api-key"
-  }
-}
-```
-
-可按需显式选择已注册的模型：
-
-```bash
-node package/cli.js --settings settings.json --model MiniMax-M3
-node package/cli.js --settings settings.json --model MiniMax-M2.7
-```
-
-| 区域 | Anthropic 兼容 Base URL | OpenAI 兼容 Base URL | 文档 |
-| --- | --- | --- | --- |
-| `global_en` | `https://api.minimax.io/anthropic` | `https://api.minimax.io/v1` | `https://platform.minimax.io/docs` |
-| `cn_zh` | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `https://platform.minimaxi.com/docs` |
-
-如果使用自定义部署，仍可通过 `ANTHROPIC_BASE_URL` 覆盖当前选中的 Anthropic 兼容端点。
 
 ### 🔑 配置自己的 API（第三方代理 / 自定义端点）
 

@@ -22,7 +22,7 @@ import {
   getDefaultMainLoopModelSetting,
   type ModelShortName,
 } from './model/model.js'
-import { MINIMAX_MODELS } from './model/providers.js'
+import { getMiniMaxModel, getMiniMaxPricing } from './model/providers.js'
 
 // @see https://platform.claude.com/docs/en/about-claude/pricing
 export type ModelCosts = {
@@ -87,25 +87,30 @@ export const COST_HAIKU_45 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
-const MINIMAX_M3_COST = {
-  inputTokens: MINIMAX_MODELS[0].pricingUsdPerMillionTokens.input,
-  outputTokens: MINIMAX_MODELS[0].pricingUsdPerMillionTokens.output,
-  promptCacheWriteTokens:
-    MINIMAX_MODELS[0].pricingUsdPerMillionTokens.cacheWrite,
-  promptCacheReadTokens:
-    MINIMAX_MODELS[0].pricingUsdPerMillionTokens.cacheRead,
-  webSearchRequests: 0,
-} as const satisfies ModelCosts
+function miniMaxPricingToModelCosts(
+  pricing: NonNullable<ReturnType<typeof getMiniMaxPricing>>,
+): ModelCosts {
+  return {
+    inputTokens: pricing.input,
+    outputTokens: pricing.output,
+    promptCacheWriteTokens: pricing.cacheWrite,
+    promptCacheReadTokens: pricing.cacheRead,
+    webSearchRequests: 0,
+  }
+}
 
-const MINIMAX_M27_COST = {
-  inputTokens: MINIMAX_MODELS[1].pricingUsdPerMillionTokens.input,
-  outputTokens: MINIMAX_MODELS[1].pricingUsdPerMillionTokens.output,
-  promptCacheWriteTokens:
-    MINIMAX_MODELS[1].pricingUsdPerMillionTokens.cacheWrite,
-  promptCacheReadTokens:
-    MINIMAX_MODELS[1].pricingUsdPerMillionTokens.cacheRead,
-  webSearchRequests: 0,
-} as const satisfies ModelCosts
+function getMiniMaxModelCosts(model: string, usage: Usage): ModelCosts | null {
+  const totalInputTokens =
+    usage.input_tokens +
+    (usage.cache_read_input_tokens ?? 0) +
+    (usage.cache_creation_input_tokens ?? 0)
+  const pricing = getMiniMaxPricing(
+    model,
+    totalInputTokens,
+    usage.service_tier,
+  )
+  return pricing ? miniMaxPricingToModelCosts(pricing) : null
+}
 
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
@@ -144,8 +149,6 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_5_25,
   [firstPartyNameToCanonical(CLAUDE_OPUS_4_6_CONFIG.firstParty)]:
     COST_TIER_5_25,
-  [MINIMAX_MODELS[0].modelId.toLowerCase()]: MINIMAX_M3_COST,
-  [MINIMAX_MODELS[1].modelId.toLowerCase()]: MINIMAX_M27_COST,
 }
 
 /**
@@ -165,6 +168,11 @@ function tokensToUSDCost(modelCosts: ModelCosts, usage: Usage): number {
 }
 
 export function getModelCosts(model: string, usage: Usage): ModelCosts {
+  const miniMaxCosts = getMiniMaxModelCosts(model, usage)
+  if (miniMaxCosts) {
+    return miniMaxCosts
+  }
+
   const shortName = getCanonicalName(model)
 
   // Check if this is an Opus 4.6 model with fast mode active.
@@ -247,6 +255,17 @@ export function formatModelPricing(costs: ModelCosts): string {
  * Returns undefined if model is not found
  */
 export function getModelPricingString(model: string): string | undefined {
+  const miniMaxModel = getMiniMaxModel(model)
+  const miniMaxPricing = getMiniMaxPricing(model)
+  if (miniMaxModel && miniMaxPricing) {
+    const formatted = formatModelPricing(
+      miniMaxPricingToModelCosts(miniMaxPricing),
+    )
+    return miniMaxModel.pricingTiersUsdPerMillionTokens.length
+      ? `from ${formatted}`
+      : formatted
+  }
+
   const shortName = getCanonicalName(model)
   const costs = MODEL_COSTS[shortName]
   if (!costs) return undefined
