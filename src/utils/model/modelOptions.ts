@@ -14,7 +14,7 @@ import {
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import { checkOpus1mAccess, checkSonnet1mAccess } from './check1mAccess.js'
-import { getAPIProvider } from './providers.js'
+import { getAPIProvider, MINIMAX_MODELS } from './providers.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import {
   getCanonicalName,
@@ -266,6 +266,21 @@ function getOpusPlanOption(): ModelOption {
   }
 }
 
+function getMiniMaxOption(
+  model: (typeof MINIMAX_MODELS)[number],
+): ModelOption {
+  const pricing = model.pricingUsdPerMillionTokens
+  const pricingLabel = model.pricingTiersUsdPerMillionTokens.length
+    ? `standard pricing from $${pricing.input}/$${pricing.output} per Mtok`
+    : `$${pricing.input}/$${pricing.output} per Mtok`
+  return {
+    value: model.modelId,
+    label: model.modelId,
+    description: `${model.contextWindow.toLocaleString()} token context · ${pricingLabel}`,
+    descriptionForModel: `${model.modelId} (${model.contextWindow.toLocaleString()} token context)`,
+  }
+}
+
 // @[MODEL LAUNCH]: Update the model picker lists below to include/reorder options for the new model.
 // Each user tier (ant, Max/Team Premium, Pro/Team Standard/Enterprise, PAYG 1P, PAYG 3P) has its own list.
 function getModelOptionsBase(fastMode = false): ModelOption[] {
@@ -321,6 +336,13 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
 
     standardOptions.push(MaxHaiku45Option)
     return standardOptions
+  }
+
+  if (getAPIProvider() === 'minimax') {
+    return [
+      getDefaultOptionForUser(fastMode),
+      ...MINIMAX_MODELS.map(getMiniMaxOption),
+    ]
   }
 
   // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus 4.6 + Opus 1M + Haiku

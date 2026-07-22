@@ -89,7 +89,7 @@ Open-ClaudeCode/
 - **API Key** (choose one):
   - 🔵 **Anthropic Official API** — Register at [console.anthropic.com](https://console.anthropic.com/) to get API Key
   - 🟢 **Third-party Proxy** — Recommended for users in certain regions, get proxy URL and API Key
-  > ⚠️ **OpenAI format proxies** (e.g., MiniMax, OpenRouter) require [Universal-AI-Protocol-Bridge](https://github.com/LING71671/Universal-AI-Protocol-Bridge) for protocol conversion
+  > ⚠️ MiniMax's Anthropic-compatible endpoint is supported directly. OpenAI-format-only endpoints require a protocol bridge.
   - 🔴 **Claude Subscription** — Login via OAuth after running (requires network access)
 
 ### Step 1: Clone and Run
@@ -212,6 +212,36 @@ node package/cli.js -r <session-id>
 ---
 
 ## ⚙️ Common Configurations
+
+### Configure MiniMax
+
+MiniMax can be selected directly through the built-in provider registry. The default region is `global_en`; use `cn_zh` for the China endpoint.
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_USE_MINIMAX": "1",
+    "MINIMAX_API_REGION": "global_en",
+    "ANTHROPIC_AUTH_TOKEN": "your-minimax-api-key"
+  }
+}
+```
+
+Run either registered model explicitly when needed:
+
+```bash
+node package/cli.js --settings settings.json --model MiniMax-M3
+node package/cli.js --settings settings.json --model MiniMax-M2.7
+```
+
+| Region | Anthropic-compatible base URL | OpenAI-compatible base URL | Documentation |
+| --- | --- | --- | --- |
+| `global_en` | `https://api.minimax.io/anthropic` | `https://api.minimax.io/v1` | `https://platform.minimax.io/docs` |
+| `cn_zh` | `https://api.minimaxi.com/anthropic` | `https://api.minimaxi.com/v1` | `https://platform.minimaxi.com/docs` |
+
+`ANTHROPIC_BASE_URL` can still override the selected Anthropic-compatible endpoint for a custom deployment.
+
+This client sends Anthropic Messages requests directly. To use one of the OpenAI-compatible endpoints above, configure [Universal-AI-Protocol-Bridge](https://github.com/LING71671/Universal-AI-Protocol-Bridge) with that OpenAI base URL, then point `ANTHROPIC_BASE_URL` at the bridge's Anthropic-compatible listener. Do not pass an OpenAI `/v1` URL directly as `ANTHROPIC_BASE_URL`.
 
 ### 🔑 Configure Your Own API (Third-party Proxy / Custom Endpoint)
 
