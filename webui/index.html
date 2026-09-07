@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OPC Web UI</title>
+<style>
+  :root {
+    --bg: #FAF9F5;          /* Claude ivory background */
+    --panel: #F0EEE6;       /* warm sand panel */
+    --panel-2: #FFFFFF;     /* white surfaces */
+    --border: #E0DCCF;
+    --border-2: #D6D1C2;
+    --text: #3D3929;        /* warm dark gray */
+    --muted: #87867F;
+    --accent: #D97757;      /* Claude terracotta orange */
+    --accent-2: #C4633F;    /* hover */
+    --accent-soft: #F7E9DF; /* soft orange tint (user bubble) */
+    --green: #3E7B4F;
+    --red: #C7442E;
+    --yellow: #B8860B;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  header .brand { font-weight: 700; font-size: 15px; margin-right: 8px; }
+  header .brand span { color: var(--accent); }
+  select, input[type="text"] {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+  label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+  #status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.running { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.idle { background: var(--green); }
+  .dot.error { background: var(--red); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 16px 8px;
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .msg {
+    margin-bottom: 18px;
+    display: flex;
+    gap: 10px;
+  }
+  .msg .avatar {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; font-weight: 700; font-size: 13px; margin-top: 2px;
+    user-select: none; color: #fff;
+  }
+  .msg.user .avatar { background: var(--accent); }
+  .msg.assistant .avatar { background: var(--text); }
+  .msg .bubble {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: break-word;
+    box-shadow: 0 1px 2px rgba(61,57,41,.04);
+  }
+  .msg.user .bubble { background: var(--accent-soft); border-color: #EDD8C8; }
+  .meta { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+
+  /* markdown-ish */
+  .bubble h1, .bubble h2, .bubble h3 { margin: 10px 0 6px; }
+  .bubble p { margin: 6px 0; }
+  .bubble code {
+    background: var(--panel); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 4px; font-size: 12px;
+    font-family: "Cascadia Code", Consolas, monospace;
+  }
+  .bubble pre {
+    background: var(--panel); border: 1px solid var(--border);
+    padding: 10px; border-radius: 8px; overflow-x: auto;
+  }
+  .bubble pre code { background: none; border: none; padding: 0; }
+  .bubble ul, .bubble ol { padding-left: 22px; margin: 6px 0; }
+  .bubble table { border-collapse: collapse; margin: 8px 0; }
+  .bubble th, .bubble td { border: 1px solid var(--border-2); padding: 4px 10px; }
+  .bubble blockquote { border-left: 3px solid var(--accent); margin: 8px 0; padding: 2px 12px; color: var(--muted); }
+  .bubble a { color: var(--accent-2); }
+
+  /* thinking block (streamed reasoning) */
+  .think {
+    margin: 0 0 8px;
+    border: 1px dashed var(--border-2);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  .think summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 10px; user-select: none; }
+  .think .think-body {
+    padding: 0 12px 8px; color: var(--muted); font-size: 12.5px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  .tool {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 8px 12px;
+    font-size: 12.5px;
+  }
+  .tool .tname { color: var(--accent-2); font-weight: 600; font-family: Consolas, monospace; }
+  .tool pre {
+    margin: 6px 0 0; padding: 8px; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 6px; overflow-x: auto; font-size: 12px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  .error-msg { color: var(--red); }
+
+  footer {
+    padding: 10px 16px 14px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    max-width: 960px; width: 100%; margin: 0 auto;
+  }
+  .composer {
+    display: flex; gap: 8px; align-items: flex-end;
+    border: 1px solid var(--border-2); border-radius: var(--radius);
+    background: var(--panel-2); padding: 8px;
+    box-shadow: 0 1px 3px rgba(61,57,41,.06);
+  }
+  textarea {
+    flex: 1; resize: none; border: none; outline: none; background: transparent;
+    color: var(--text); font: inherit; max-height: 180px; min-height: 22px; padding: 4px;
+  }
+  button {
+    background: var(--accent); color: #fff; border: none; cursor: pointer;
+    border-radius: 8px; padding: 7px 14px; font-weight: 600; font-size: 13px;
+    white-space: nowrap;
+  }
+  button:hover { background: var(--accent-2); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); border: 1px solid var(--border-2); color: var(--text); }
+  button.secondary:hover { background: var(--panel); }
+  button.danger { background: var(--red); }
+  button.danger:hover { background: #A93722; }
+
+  .empty {
+    text-align: center; color: var(--muted); margin-top: 15vh; font-size: 14px;
+  }
+  .empty h2 { color: var(--text); font-weight: 600; }
+  .empty code { background: var(--panel); padding: 2px 8px; border-radius: 6px; }
+
+  /* permission modal */
+  #permBackdrop {
+    position: fixed; inset: 0; background: rgba(61,57,41,.35);
+    display: none; align-items: center; justify-content: center; z-index: 50;
+  }
+  #permBackdrop.open { display: flex; }
+  #permModal {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    width: min(620px, 92vw); max-height: 80vh; overflow: auto; padding: 18px;
+    box-shadow: 0 8px 30px rgba(61,57,41,.15);
+  }
+  #permModal h3 { margin: 0 0 4px; font-size: 15px; }
+  #permTool { color: var(--accent-2); font-family: Consolas, monospace; }
+  #permModal pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; font-size: 12.5px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; max-height: 300px;
+  }
+  #permActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+  .session-chip {
+    display: inline-block; font-size: 11px; color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 20px; padding: 2px 10px; margin: 2px 4px 2px 0; cursor: pointer;
+  }
+  .session-chip:hover { color: var(--accent-2); border-color: var(--accent); }
+  #historyRow { margin: 2px 16px 0; font-size: 12px; color: var(--muted); }
+  .cursor { display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">OPC <span>Web UI</span></div>
+  <label>模型
+    <select id="modelSel">
+      <option value="">默认 (CLI 配置)</option>
+      <option>sonnet</option><option>opus</option><option>haiku</option>
+    </select>
+  </label>
+  <label>权限
+    <select id="permSel">
+      <option value="acceptEdits">acceptEdits</option>
+      <option value="default">default (逐项询问)</option>
+      <option value="plan">plan</option>
+      <option value="bypassPermissions">bypassPermissions</option>
+    </select>
+  </label>
+  <label>目录
+    <input type="text" id="cwdInput" style="width:220px" placeholder="工作目录（默认仓库根）" />
+  </label>
+  <div id="status"><span class="dot idle" id="statusDot"></span><span id="statusText">空闲</span></div>
+</header>
+
+<main id="messages">
+  <div class="empty" id="emptyState">
+    <h2>本地 OPC Web 界面</h2>
+    <p>在下方输入问题，回车发送。<br />模型/权限/目录修改后会作用于下一次发送。<br />CLI 事件经 SSE 实时流式显示。</p>
+  </div>
+</main>
+
+<footer>
+  <div id="historyRow"></div>
+  <div class="composer">
+    <textarea id="promptInput" rows="1" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="stopBtn" class="danger" disabled>停止</button>
+    <button id="sendBtn">发送</button>
+  </div>
+</footer>
+
+<div id="permBackdrop">
+  <div id="permModal">
+    <h3>工具权限请求</h3>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:8px">CLI 请求使用工具 <span id="permTool"></span></div>
+    <pre id="permInput"></pre>
+    <div id="permActions">
+      <button id="permDeny" class="secondary">拒绝</button>
+      <button id="permAllow">允许</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict'
+// ---------------------------------------------------------------------------
+// state
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id)
+const messagesEl = $('messages')
+let chatId = null
+let running = false
+let currentPerm = null // { requestId, resolve }
+let stream = null // active streaming content node
+let renderQueued = false
+let renderedText = false
+const history = []
+const sessions = new Map() // chatId -> { title, events: [] } (in-memory transcript)
+
+// ---------------------------------------------------------------------------
+// tiny markdown renderer (safe: escapes HTML first)
+// ---------------------------------------------------------------------------
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+function inlineCode(s) {
+  // escape, then highlight `code`
+  return esc(s).replace(/`([^`]+)`/g, (_, c) => '<code>' + c + '</code>')
+}
+function renderMarkdown(text) {
+  if (!text) return ''
+  const lines = String(text).split('\n')
+  let html = ''
+  let inCode = false
+  let codeLang = ''
+  let codeBuf = []
+  let inList = false
+  let paraBuf = []
+
+  const flushPara = () => {
+    if (paraBuf.length) {
+      html += '<p>' + inlineCode(paraBuf.join(' ')) + '</p>'
+      paraBuf = []
+    }
+  }
+  const closeList = () => {
+    if (inList) { html += '</ul>'; inList = false }
+  }
+
+  for (const raw of lines) {
+    const line = raw
+    if (/^```/.test(line)) {
+      if (!inCode) {
+        flushPara(); closeList()
+        inCode = true; codeLang = line.slice(3).trim(); codeBuf = []
+      } else {
+        html += '<pre><code' + (codeLang ? ' class="lang-' + esc(codeLang) + '"' : '') + '>' +
+          esc(codeBuf.join('\n')) + '</code></pre>'
+        inCode = false
+      }
+      continue
+    }
+    if (inCode) { codeBuf.push(line); continue }
+
+    if (/^\s*$/.test(line)) { flushPara(); closeList(); continue }
+    if (/^#{1,6}\s/.test(line)) {
+      flushPara(); closeList()
+      const m = line.match(/^(#{1,6})\s+(.*)$/)
+      const lvl = m[1].length
+      html += `<h${lvl}>${inlineCode(m[2])}</h${lvl}>`
+      continue
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      flushPara()
+      if (!inList) { html += '<ul>'; inList = true }
+      html += '<li>' + inlineCode(line.replace(/^\s*[-*]\s+/, '')) + '</li>'
+      continue
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      flushPara(); closeList()
+      html += '<p>' + inlineCode(line.replace(/^\s*\d+\.\s+/, '')) + '</p>'
+      continue
+    }
+    if (/^>\s?/.test(line)) {
+      flushPara(); closeList()
+      html += '<blockquote>' + inlineCode(line.replace(/^>\s?/, '')) + '</blockquote>'
+      continue
+    }
+    // tables: minimal
+    if (/^\|/.test(line) && /^\|[\s:|-]+\|$/.test(line)) continue
+    paraBuf.push(line)
+  }
+  flushPara(); closeList()
+  if (inCode) html += '<pre><code>' + esc(codeBuf.join('\n')) + '</code></pre>'
+  return html
+}
+
+// ---------------------------------------------------------------------------
+// message rendering
+// ---------------------------------------------------------------------------
+function addMsg(role, text, opts = {}) {
+  const empty = $('emptyState')
+  if (empty) empty.remove()
+  const wrap = document.createElement('div')
+  wrap.className = 'msg ' + (role === 'user' ? 'user' : 'assistant')
+  const avatar = role === 'user' ? '我' : 'AI'
+  wrap.innerHTML =
+    '<div class="avatar">' + avatar + '</div><div class="bubble">' +
+    (opts.meta ? '<div class="meta">' + esc(opts.meta) + '</div>' : '') +
+    '<div class="content">' + (opts.raw ? esc(text) : renderMarkdown(text || '')) + '</div></div>'
+  messagesEl.appendChild(wrap)
+  messagesEl.scrollTop = messagesEl.scrollHeight
+  return wrap.querySelector('.content')
+}
+
+function addToolMsg(toolName, input) {
+  const wrap = document.createElement('div')
+  wrap.className = 'msg assistant'
+  let inputText = ''
+  try { inputText = JSON.stringify(input, null, 2) } catch { inputText = String(input) }
+  wrap.innerHTML = '<div class="avatar">AI</div><div class="bubble"><div class="meta">工具调用</div>' +
+    '<div class="tool"><span class="tname">' + esc(toolName) + '</span><pre>' + esc(inputText) + '</pre></div></div>'
+  messagesEl.appendChild(wrap)
+  messagesEl.scrollTop = messagesEl.scrollHeight
+  return wrap.querySelector('pre')
+}
+
+function addSystemMsg(text, kind) {
+  const wrap = document.createElement('div')
+  wrap.className = 'msg ' + (kind === 'error' ? 'error-msg' : 'assistant')
+  wrap.innerHTML = '<div class="avatar">ⓘ</div><div class="bubble"><div class="meta">系统</div>' +
+    (kind === 'error'
+      ? '<div class="error-msg">' + esc(text) + '</div>'
+      : renderMarkdown(text)) + '</div>'
+  messagesEl.appendChild(wrap)
+  messagesEl.scrollTop = messagesEl.scrollHeight
+}
+
+// ---------------------------------------------------------------------------
+// SSE
+// ---------------------------------------------------------------------------
+function connectEvents() {
+  const es = new EventSource('/api/events')
+  es.onmessage = ev => {
+    let e
+    try { e = JSON.parse(ev.data) } catch { return }
+    // Single active chat: ignore events belonging to other chats. When idle
+    // (chatId null) we only accept events that don't belong to a specific
+    // chat — otherwise replayed events from finished chats would re-render.
+    if (e.chatId) {
+      if (e.chatId !== chatId) return
+    } else if (!e.chatId && chatId) {
+      // broadcast without chatId while a chat is active: treat as system noise
+      return
+    }
+    handleEvent(e)
+  }
+  es.onerror = () => {
+    // EventSource auto-reconnects; show transient state
+    setStatus('重连中…', 'error')
+  }
+  es.onopen = () => {
+    if (!running) setStatus('空闲', 'idle')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// streaming helpers
+// ---------------------------------------------------------------------------
+function openStreamBubble() {
+  const node = addMsg('assistant', '')
+  node.dataset.streaming = '1'
+  node.dataset.text = ''
+  node._tools = {}
+  node._toolQueue = []
+  return node
+}
+
+function getStreamNode() {
+  if (stream && stream.isConnected) return stream
+  const existing = messagesEl.querySelector('.msg.assistant .content[data-streaming="1"]')
+  if (existing) return (stream = existing)
+  return (stream = openStreamBubble())
+}
+
+function appendStreamText(node, chunk) {
+  if (!chunk) return
+  node.dataset.text = (node.dataset.text || '') + chunk
+  renderedText = true
+  messagesEl.scrollTop = messagesEl.scrollHeight
+  if (renderQueued) return
+  renderQueued = true
+  requestAnimationFrame(() => {
+    renderQueued = false
+    const el = messagesEl.querySelector('.msg.assistant .content[data-streaming="1"]')
+    if (el) el.innerHTML = renderMarkdown(el.dataset.text || '')
+  })
+}
+
+function ensureThink(node) {
+  if (node._thinkBody) return
+  const bubble = node.closest('.bubble')
+  const details = document.createElement('details')
+  details.className = 'think'
+  details.open = true
+  details.innerHTML = '<summary>思考过程</summary><div class="think-body"></div>'
+  bubble.insertBefore(details, node)
+  node._think = details
+  node._thinkBody = details.querySelector('.think-body')
+  node._thinkText = ''
+}
+
+function appendThink(node, chunk) {
+  ensureThink(node)
+  node._thinkText = (node._thinkText || '') + (chunk || '')
+  node._thinkBody.textContent = node._thinkText
+  messagesEl.scrollTop = messagesEl.scrollHeight
+}
+
+function takeToolCard(node, name) {
+  const queue = (node && node._toolQueue) || []
+  let idx = queue.findIndex(c => c.name === name)
+  if (idx === -1) idx = 0
+  return queue.splice(idx, 1)[0] || null
+}
+
+function finishStream() {
+  if (!stream) return
+  if (stream._think) stream._think.open = false
+  for (const key of Object.keys(stream._tools || {})) {
+    const card = stream._tools[key]
+    if (card && card.acc) {
+      try { card.pre.textContent = JSON.stringify(JSON.parse(card.acc), null, 2) } catch { /* keep raw */ }
+    }
+  }
+  if (stream.dataset.text) {
+    stream.innerHTML = renderMarkdown(stream.dataset.text)
+  } else if (!stream._think) {
+    // message had no text/thinking (e.g. only a tool call): drop empty bubble
+    const msg = stream.closest('.msg')
+    if (msg) msg.remove()
+  }
+  delete stream.dataset.streaming
+  stream = null
+}
+
+function handleEvent(e) {
+  switch (e.type) {
+    case 'run-start':
+      running = true
+      stream = null
+      renderedText = false
+      setStatus('运行中…', 'running')
+      $('sendBtn').disabled = true
+      $('stopBtn').disabled = false
+      sessions.set(chatId, { title: e.args?.[e.args.length - 1] || '会话', events: [] })
+      break
+    case 'assistant': {
+      if (sessions.has(chatId)) sessions.get(chatId).events.push(e)
+      const blocks = e.message?.content || []
+      let text = ''
+      let thinking = ''
+      const toolUses = []
+      for (const b of blocks) {
+        if (b.type === 'text') text += b.text || ''
+        else if (b.type === 'thinking') thinking = b.thinking || ''
+        else if (b.type === 'tool_use') toolUses.push(b)
+      }
+      const node = stream && stream.isConnected ? stream : null
+      if (node) {
+        // authoritative snapshot for the completed content block(s)
+        if (thinking) {
+          ensureThink(node)
+          node._thinkText = thinking
+          node._thinkBody.textContent = thinking
+        }
+        if (text) {
+          if (text.length >= (node.dataset.text || '').length) node.dataset.text = text
+          node.innerHTML = renderMarkdown(node.dataset.text || '')
+          renderedText = true
+        }
+        for (const tu of toolUses) {
+          const card = takeToolCard(node, tu.name)
+          let input = tu.input
+          if (input == null && card) {
+            try { input = JSON.parse(card.acc || '{}') } catch { input = {} }
+          }
+          if (card) card.pre.textContent = JSON.stringify(input ?? {}, null, 2)
+          else addToolMsg(tu.name, input || {})
+        }
+      } else {
+        // fallback when stream events were not available
+        if (thinking) {
+          const n = getStreamNode()
+          ensureThink(n)
+          n._thinkText = thinking
+          n._thinkBody.textContent = thinking
+        }
+        if (text) {
+          const n = getStreamNode()
+          n.dataset.text = text
+          n.innerHTML = renderMarkdown(text)
+          renderedText = true
+        }
+        for (const tu of toolUses) addToolMsg(tu.name, tu.input || {})
+      }
+      break
+    }
+    case 'result': {
+      finishStream()
+      const text = e.result || ''
+      // result duplicates what we already streamed; only render as fallback
+      if (text && !renderedText) addMsg('assistant', text)
+      markAllDone()
+      break
+    }
+    case 'stream_event': {
+      const ev = e.event || {}
+      if (ev.type === 'message_start') {
+        getStreamNode()
+      } else if (ev.type === 'content_block_start') {
+        const block = ev.content_block || {}
+        if (block.type === 'thinking') {
+          ensureThink(getStreamNode())
+        } else if (block.type === 'tool_use') {
+          const node = getStreamNode()
+          const pre = addToolMsg(block.name || 'tool', {})
+          const card = { name: block.name || 'tool', pre, acc: '' }
+          node._tools[ev.index] = card
+          node._toolQueue.push(card)
+        }
+      } else if (ev.type === 'content_block_delta') {
+        const d = ev.delta || {}
+        if (d.type === 'thinking_delta') {
+          appendThink(getStreamNode(), d.thinking)
+        } else if (d.type === 'text_delta') {
+          appendStreamText(getStreamNode(), d.text)
+        } else if (d.type === 'input_json_delta') {
+          const card = stream && stream._tools ? stream._tools[ev.index] : null
+          if (card) {
+            card.acc += d.partial_json || ''
+            card.pre.textContent = card.acc
+            messagesEl.scrollTop = messagesEl.scrollHeight
+          }
+        }
+      } else if (ev.type === 'message_stop') {
+        finishStream()
+      }
+      break
+    }
+    case 'permission_request': {
+      currentPerm = { requestId: e.request_id, toolName: e.tool_name, input: e.input }
+      $('permTool').textContent = e.tool_name
+      let inputText = ''
+      try { inputText = JSON.stringify(e.input, null, 2) } catch { inputText = String(e.input) }
+      $('permInput').textContent = e.message || inputText
+      $('permBackdrop').classList.add('open')
+      setStatus('等待授权: ' + e.tool_name, 'running')
+      break
+    }
+    case 'permission_resolved':
+      if (currentPerm && currentPerm.requestId === e.request_id) {
+        $('permBackdrop').classList.remove('open')
+        currentPerm = null
+      }
+      break
+    case 'run-end': {
+      finishStream()
+      running = false
+      $('sendBtn').disabled = false
+      $('stopBtn').disabled = true
+      markAllDone()
+      const status = e.stopped ? '已停止' : (e.code === 0 ? '完成' : '出错 (exit ' + e.code + ')')
+      setStatus(status, e.code === 0 || e.stopped ? 'idle' : 'error')
+      // Allow the next message to start a fresh chat; keeps late/replayed
+      // events for the finished chat from being rendered twice.
+      chatId = null
+      break
+    }
+    case 'error':
+      if (!running) setStatus('错误', 'error')
+      addSystemMsg(e.message || '未知错误', 'error')
+      break
+    case 'stderr':
+      if (!running) addSystemMsg(e.text, 'error')
+      break
+    default:
+      break
+  }
+}
+
+function markAllDone() {
+  for (const el of messagesEl.querySelectorAll('.content[data-streaming="1"]')) {
+    delete el.dataset.streaming
+  }
+}
+
+// ---------------------------------------------------------------------------
+// actions
+// ---------------------------------------------------------------------------
+function setStatus(text, kind) {
+  $('statusText').textContent = text
+  $('statusDot').className = 'dot ' + kind
+}
+
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || res.statusText)
+  return data
+}
+
+async function sendMessage() {
+  const prompt = $('promptInput').value.trim()
+  if (!prompt || running) return
+  const cwd = $('cwdInput').value.trim() || undefined
+  // Generate chatId up front (before POST) so SSE events that arrive while
+  // the POST is still in flight — run-start, system/init, assistant — are
+  // not mistaken for a different chat and dropped.
+  chatId = crypto.randomUUID()
+  addMsg('user', prompt)
+  $('promptInput').value = ''
+  autoGrow()
+  try {
+    const data = await post('/api/chat', {
+      chatId,
+      prompt,
+      cwd,
+      model: $('modelSel').value || undefined,
+      permissionMode: $('permSel').value,
+    })
+    if (data.chatId !== chatId) chatId = data.chatId // server is authoritative
+    addHistoryChip(chatId, prompt)
+  } catch (err) {
+    addSystemMsg('发送失败: ' + err.message, 'error')
+    setStatus('错误', 'error')
+    running = false
+    chatId = null
+    $('sendBtn').disabled = false
+  }
+}
+
+function addHistoryChip(id, title) {
+  const row = $('historyRow')
+  const chip = document.createElement('span')
+  chip.className = 'session-chip'
+  chip.textContent = (title.length > 24 ? title.slice(0, 24) + '…' : title)
+  chip.title = '点击以同一配置重发: ' + title
+  chip.onclick = () => {
+    $('promptInput').value = title
+    autoGrow()
+    $('promptInput').focus()
+  }
+  row.appendChild(chip)
+}
+
+async function stopRun() {
+  if (!chatId) return
+  try {
+    await post('/api/stop', { chatId })
+    setStatus('正在停止…', 'running')
+  } catch (err) {
+    addSystemMsg('停止失败: ' + err.message, 'error')
+  }
+}
+
+// ---------------------------------------------------------------------------
+// events & bootstrap
+// ---------------------------------------------------------------------------
+$('sendBtn').onclick = sendMessage
+$('stopBtn').onclick = stopRun
+$('promptInput').addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault()
+    sendMessage()
+  }
+})
+const autoGrow = () => {
+  $('promptInput').style.height = 'auto'
+  $('promptInput').style.height = Math.min($('promptInput').scrollHeight, 180) + 'px'
+}
+$('promptInput').addEventListener('input', autoGrow)
+
+$('permAllow').onclick = () => {
+  if (!currentPerm) return
+  const { requestId } = currentPerm
+  $('permBackdrop').classList.remove('open')
+  post('/api/control', { chatId, requestId, allow: true }).catch(() => {})
+  currentPerm = null
+}
+$('permDeny').onclick = () => {
+  if (!currentPerm) return
+  const { requestId } = currentPerm
+  $('permBackdrop').classList.remove('open')
+  post('/api/control', { chatId, requestId, allow: false }).catch(() => {})
+  currentPerm = null
+}
+$('permBackdrop').onclick = ev => {
+  if (ev.target === $('permBackdrop')) {
+    // ignore click-outside for now (would block the CLI); keep modal
+  }
+}
+
+connectEvents()
+$('promptInput').focus()
+</script>
+</body>
+</html>
