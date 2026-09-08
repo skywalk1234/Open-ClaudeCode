@@ -417,7 +417,7 @@ function createServer(opts) {
     if (req.method === 'GET' && p === '/api/conversations') {
       const list = [...conversations.values()]
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-        .map(({ id, title, cliSessionId, forkedFrom, createdAt, updatedAt, running, entryPrompt }) => ({
+        .map(({ id, title, cliSessionId, forkedFrom, createdAt, updatedAt, running, entryPrompt, forkQuote }) => ({
           id,
           title,
           hasTranscript: Boolean(cliSessionId),
@@ -426,6 +426,7 @@ function createServer(opts) {
           updatedAt,
           running: Boolean(running),
           entryPreview: String(entryPrompt || title || '').slice(0, 300),
+          forkQuote: String(forkQuote || '').slice(0, 300),
         }))
       sendJson(res, 200, list)
       return
@@ -516,6 +517,7 @@ function createServer(opts) {
             id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
             title: String(body.title || prompt).slice(0, 40),
             entryPrompt: String(body.entry || prompt).slice(0, 600), // first msg of this branch
+            forkQuote: String(body.quote || '').slice(0, 600), // the selected AI text this fork asked about
             cliSessionId: src.cliSessionId,
             forkedFrom: src.id,
             createdAt: Date.now(),

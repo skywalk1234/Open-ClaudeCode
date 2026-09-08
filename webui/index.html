@@ -346,7 +346,32 @@
     white-space: pre-wrap; word-break: break-word;
     max-height: 220px; overflow: hidden;
   }
+  #ggTip .gt-label {
+    color: var(--muted); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .05em; margin: 1px 0 2px;
+  }
   #ggTip .gt-meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
+
+  /* fork-graph right-click context menu */
+  #ggMenu {
+    position: fixed; z-index: 72; min-width: 176px; display: none;
+    background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 9px;
+    box-shadow: 0 6px 22px rgba(61,57,41,.2); padding: 5px; font-size: 12px;
+  }
+  #ggMenu.open { display: block; }
+  #ggMenu .ggm-title {
+    color: var(--muted); font-size: 11px; padding: 5px 9px 6px;
+    border-bottom: 1px solid var(--border); margin-bottom: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+  }
+  #ggMenu button.ggm-item {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    color: var(--text); padding: 6px 9px; border-radius: 6px;
+    cursor: pointer; font-size: 12px;
+  }
+  #ggMenu button.ggm-item:hover { background: var(--panel); }
+  #ggMenu button.ggm-item.danger { color: var(--red); }
+  #ggMenu button.ggm-item.danger:hover { background: rgba(199, 68, 46, .12); }
 
   .cursor { display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
@@ -429,6 +454,12 @@
 
 <div id="ggTip"></div>
 
+<div id="ggMenu">
+  <div class="ggm-title" id="ggMenuTitle"></div>
+  <button class="ggm-item" id="ggMenuJump">切换到该会话</button>
+  <button class="ggm-item danger" id="ggMenuDelete">删除会话</button>
+</div>
+
 <script>
 'use strict'
 // ---------------------------------------------------------------------------
@@ -449,81 +480,183 @@ let renderedText = false
 const history = []
 
 // ---------------------------------------------------------------------------
-// tiny markdown renderer (safe: escapes HTML first)
+// markdown renderer (safe: input HTML is escaped first; we only ever emit our
+// own tags, so raw HTML from the model is never inserted)
 // ---------------------------------------------------------------------------
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
-function inlineCode(s) {
-  // escape, then highlight `code`
-  return esc(s).replace(/`([^`]+)`/g, (_, c) => '<code>' + c + '</code>')
+function safeHref(url) {
+  const u = String(url || '').trim()
+  return /^(?:https?:|mailto:|#|\/|\.)/i.test(u) ? u : ''
 }
-function renderMarkdown(text) {
-  if (!text) return ''
-  const lines = String(text).split('\n')
-  let html = ''
-  let inCode = false
-  let codeLang = ''
-  let codeBuf = []
-  let inList = false
-  let paraBuf = []
 
-  const flushPara = () => {
-    if (paraBuf.length) {
-      html += '<p>' + inlineCode(paraBuf.join(' ')) + '</p>'
-      paraBuf = []
-    }
-  }
-  const closeList = () => {
-    if (inList) { html += '</ul>'; inList = false }
-  }
+// Inline markdown over an ALREADY-escaped string. Passages that must not be
+// reformatted (code spans, whole link tags) are stashed to N
+// markers, so the tag/emphasis regexes can never match inside them.
+function inlineMd(s) {
+  if (!s) return ''
+  const tokens = []
+  const stash = html => { tokens.push(html); return '' + (tokens.length - 1) + '' }
+  // code spans first
+  s = s.replace(/`([^`]+)`/g, (_, c) => stash('<code>' + c + '</code>'))
+  // [text](url) — label rendered with inlineMd again, url goes through safeHref
+  s = s.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (m, txt, url) => {
+    const href = safeHref(url)
+    return href
+      ? stash('<a href="' + href.replace(/"/g, '&quot;') + '">' + inlineMd(txt) + '</a>')
+      : txt
+  })
+  // bold, italic, strikethrough (no underscore emphasis: foo_bar stays as-is)
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>')
+  // backslash escapes
+  s = s.replace(/\\([\\`*_{}\[\]()#+\-.!>])/g, '$1')
+  return s.replace(/(\d+)/g, (m, n) => tokens[+n])
+}
+function renderInline(raw) {
+  return inlineMd(esc(raw == null ? '' : raw))
+}
 
-  for (const raw of lines) {
-    const line = raw
-    if (/^```/.test(line)) {
-      if (!inCode) {
-        flushPara(); closeList()
-        inCode = true; codeLang = line.slice(3).trim(); codeBuf = []
-      } else {
-        html += '<pre><code' + (codeLang ? ' class="lang-' + esc(codeLang) + '"' : '') + '>' +
-          esc(codeBuf.join('\n')) + '</code></pre>'
-        inCode = false
+// one list line -> { indent, ordered, content } | null
+function listMarker(line) {
+  const m = String(line).match(/^(\s*)([-+*]|\d{1,9}[.)])\s+(.*)$/)
+  if (!m) return null
+  return { indent: m[1].replace(/\t/g, '  ').length, ordered: /^\d/.test(m[2]), content: m[3] }
+}
+
+function renderList(lines) {
+  const nodes = [] // { indent, ordered, content, children: [] }
+  for (const ln of lines) {
+    const m = listMarker(ln)
+    if (m) nodes.push({ indent: m.indent, ordered: m.ordered, content: m.content, children: [] })
+    else if (ln.trim() && nodes.length) nodes[nodes.length - 1].content += ' ' + ln.trim() // indented continuation
+  }
+  // nest flat items by indentation
+  const root = []
+  const stack = [] // { indent, into }
+  for (const n of nodes) {
+    while (stack.length && stack[stack.length - 1].indent >= n.indent) stack.pop()
+    const into = stack.length ? stack[stack.length - 1].into : root
+    into.push(n)
+    stack.push({ indent: n.indent, into: n.children })
+  }
+  const renderItems = arr => {
+    let html = ''
+    for (let i = 0; i < arr.length;) {
+      const ordered = arr[i].ordered
+      const tag = ordered ? 'ol' : 'ul'
+      let itemsHtml = ''
+      while (i < arr.length && arr[i].ordered === ordered) {
+        const n = arr[i]
+        const content = n.content.replace(/^\s*\[( |x|X)\]\s+/, (_, c) => (c === ' ' ? '☐ ' : '☑ '))
+        itemsHtml += '<li>' + renderInline(content) +
+          (n.children.length ? renderItems(n.children) : '') + '</li>'
+        i++
       }
-      continue
+      html += '<' + tag + '>' + itemsHtml + '</' + tag + '>'
     }
-    if (inCode) { codeBuf.push(line); continue }
-
-    if (/^\s*$/.test(line)) { flushPara(); closeList(); continue }
-    if (/^#{1,6}\s/.test(line)) {
-      flushPara(); closeList()
-      const m = line.match(/^(#{1,6})\s+(.*)$/)
-      const lvl = m[1].length
-      html += `<h${lvl}>${inlineCode(m[2])}</h${lvl}>`
-      continue
-    }
-    if (/^\s*[-*]\s+/.test(line)) {
-      flushPara()
-      if (!inList) { html += '<ul>'; inList = true }
-      html += '<li>' + inlineCode(line.replace(/^\s*[-*]\s+/, '')) + '</li>'
-      continue
-    }
-    if (/^\s*\d+\.\s+/.test(line)) {
-      flushPara(); closeList()
-      html += '<p>' + inlineCode(line.replace(/^\s*\d+\.\s+/, '')) + '</p>'
-      continue
-    }
-    if (/^>\s?/.test(line)) {
-      flushPara(); closeList()
-      html += '<blockquote>' + inlineCode(line.replace(/^>\s?/, '')) + '</blockquote>'
-      continue
-    }
-    // tables: minimal
-    if (/^\|/.test(line) && /^\|[\s:|-]+\|$/.test(line)) continue
-    paraBuf.push(line)
+    return html
   }
-  flushPara(); closeList()
-  if (inCode) html += '<pre><code>' + esc(codeBuf.join('\n')) + '</code></pre>'
-  return html
+  return renderItems(root)
+}
+
+function splitRow(line) {
+  let t = line.trim()
+  if (t.startsWith('|')) t = t.slice(1)
+  if (t.endsWith('|')) t = t.slice(0, -1)
+  return t.split('|').map(c => c.trim())
+}
+function isTableSep(line) {
+  let t = line.trim()
+  if (t.startsWith('|')) t = t.slice(1)
+  if (t.endsWith('|')) t = t.slice(0, -1)
+  const cells = t.split('|')
+  return cells.length > 0 && cells.every(c => /^\s*:?-+:?\s*$/.test(c))
+}
+function isTableRow(line) {
+  return /^\s*\|/.test(line) && /\|\s*$/.test(line) && !isTableSep(line)
+}
+
+function renderMarkdown(text) {
+  if (text == null || text === '') return ''
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n')
+  const L = lines.length
+  const html = []
+  let i = 0
+  while (i < L) {
+    const line = lines[i]
+    if (/^\s*$/.test(line)) { i++; continue }
+    // fenced code block (may contain blank lines / any language)
+    const fm = line.match(/^\s*```\s*([\w-]*)\s*$/)
+    if (fm) {
+      const buf = []
+      i++
+      while (i < L && !/^\s*```\s*$/.test(lines[i])) { buf.push(lines[i]); i++ }
+      if (i < L) i++ // consume the closing fence
+      html.push('<pre><code' + (fm[1] ? ' class="lang-' + esc(fm[1]) + '"' : '') + '>' +
+        esc(buf.join('\n')) + '</code></pre>')
+      continue
+    }
+    // ATX heading
+    const hm = line.match(/^(#{1,6})\s+(.*)$/)
+    if (hm) {
+      const lvl = Math.min(6, hm[1].length)
+      html.push('<h' + lvl + '>' + renderInline(hm[2]) + '</h' + lvl + '>')
+      i++
+      continue
+    }
+    // horizontal rule --- / *** / ___
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) { html.push('<hr>'); i++; continue }
+    // table: header row followed by a separator row
+    if (isTableRow(line) && i + 1 < L && isTableSep(lines[i + 1])) {
+      const head = splitRow(line)
+      i += 2
+      const rows = []
+      while (i < L && isTableRow(lines[i])) { rows.push(splitRow(lines[i])); i++ }
+      html.push('<table><thead><tr>' + head.map(c => '<th>' + renderInline(c) + '</th>').join('') +
+        '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' + r.map(c => '<td>' + renderInline(c) + '</td>').join('') + '</tr>').join('') +
+        '</tbody></table>')
+      continue
+    }
+    // blockquote (recursed so nested markdown inside renders)
+    if (/^\s*>\s?/.test(line)) {
+      const buf = []
+      while (i < L && /^\s*>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, '')); i++ }
+      html.push('<blockquote>' + renderMarkdown(buf.join('\n')) + '</blockquote>')
+      continue
+    }
+    // list run (items + deeper-indented children)
+    if (listMarker(line)) {
+      const raw = []
+      while (i < L) {
+        const cur = lines[i]
+        if (/^\s*$/.test(cur)) {
+          let j = i
+          while (j < L && /^\s*$/.test(lines[j])) j++
+          if (j < L && listMarker(lines[j])) { i = j; continue } // blank inside a loose list: skip
+          break
+        }
+        if (!listMarker(cur) && !/^\s{2,}\S/.test(cur)) break
+        raw.push(cur); i++
+      }
+      html.push(renderList(raw))
+      continue
+    }
+    // plain paragraph: gather until a block-starting line
+    const buf = [line]
+    i++
+    while (i < L) {
+      const c = lines[i]
+      if (/^\s*$/.test(c) || /^\s*```/.test(c) || /^(#{1,6})\s/.test(c) ||
+          /^\s*>\s?/.test(c) || isTableRow(c) || listMarker(c)) break
+      buf.push(c); i++
+    }
+    html.push('<p>' + renderInline(buf.join(' ')) + '</p>')
+  }
+  return html.join('')
 }
 
 // ---------------------------------------------------------------------------
@@ -957,16 +1090,34 @@ function fmtTime(ts) {
     : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + hm
 }
 
+// Walk up forkedFrom links to find the top MAIN conversation a conversation
+// belongs to (conversation itself when it is a root).
+function rootOf(id) {
+  let cur = conversationsCache.find(c => c.id === id) || null
+  const seen = new Set()
+  while (cur && cur.forkedFrom && !seen.has(cur.id)) {
+    seen.add(cur.id)
+    cur = conversationsCache.find(c => c.id === cur.forkedFrom) || null
+  }
+  return cur ? cur.id : null
+}
+
+// The top list shows ONLY main (root) conversations; forks live in the fork
+// graph below, under their main conversation. A fork that is active keeps its
+// main conversation highlighted here.
 function renderSessionList() {
   const list = $('sessionList')
   list.innerHTML = ''
-  if (!conversationsCache.length) {
+  const byId = new Map(conversationsCache.map(c => [c.id, c]))
+  const roots = conversationsCache.filter(c => !(c.forkedFrom && byId.has(c.forkedFrom)))
+  if (!roots.length) {
     list.innerHTML = '<div class="sb-empty">暂无会话</div>'
     return
   }
-  for (const c of conversationsCache) {
+  const activeRoot = rootOf(conversationId)
+  for (const c of roots) {
     const item = document.createElement('div')
-    item.className = 'sess-item' + (c.id === conversationId ? ' active' : '')
+    item.className = 'sess-item' + (c.id === activeRoot ? ' active' : '')
     item.title = c.title || ''
     item.innerHTML =
       '<div class="sess-head"><span class="s-title">' + esc(c.title || '未命名会话') + '</span>' +
@@ -1019,15 +1170,33 @@ function showGraphTip(row, conv) {
   const parent = conv.forkedFrom
     ? (conversationsCache.find(c => c.id === conv.forkedFrom) || null)
     : null
-  const kind = parent
-    ? '分支 · fork 自「' + (parent.title || '未命名') + '」'
-    : (conv.forkedFrom ? '分支（父会话已删除）' : '主对话')
-  const body = conv.entryPreview && conv.entryPreview.trim()
-    ? conv.entryPreview
-    : '（暂无第一条消息内容）'
+  const isFork = !!conv.forkedFrom
+  const kind = isFork
+    ? '分支 · fork 自「' + (parent ? (parent.title || '未命名') : '已删除') + '」'
+    : '主对话'
+  // A fork previews the exact text the user SELECTED to fork (truncated to the
+  // first 20 chars when long), not the follow-up question — the question is
+  // already the row title. Roots preview their first user message instead.
+  let body
+  let label
+  if (isFork) {
+    label = '引用片段'
+    const q = (conv.forkQuote || '').trim()
+    body = q
+      ? (q.length > 20 ? q.slice(0, 20) + '…' : q)
+      : ((conv.entryPreview && conv.entryPreview.trim())
+          ? conv.entryPreview // legacy fork without a stored quote
+          : '（暂无引用文本）')
+  } else {
+    label = '第一条消息'
+    body = (conv.entryPreview && conv.entryPreview.trim())
+      ? conv.entryPreview
+      : '（暂无第一条消息内容）'
+  }
   ggTipEl.innerHTML =
     '<div class="gt-kind">' + esc(kind) + '</div>' +
     '<div class="gt-title">' + esc(conv.title || '未命名会话') + '</div>' +
+    '<div class="gt-label">' + label + '</div>' +
     '<div class="gt-body">' + esc(body) + '</div>' +
     '<div class="gt-meta">更新于 ' + esc(fmtTime(conv.updatedAt)) + '</div>'
   ggTipEl.style.display = 'block'
@@ -1072,6 +1241,8 @@ function appendGraphNode(hostEl, conv, children, isRoot) {
     ggTipTimer = setTimeout(() => showGraphTip(row, conv), 220)
   })
   row.addEventListener('mouseleave', hideGraphTipSoon)
+  // right-click a graph node → context menu (delete a fork, jump to it, …)
+  row.addEventListener('contextmenu', ev => openGraphMenu(ev, conv))
 
   let count = 1
   const kids = children.get(conv.id)
@@ -1084,19 +1255,78 @@ function appendGraphNode(hostEl, conv, children, isRoot) {
   return count
 }
 
+// The fork graph shows the tree of the currently selected MAIN conversation
+// only (select a main conversation in the list above → its forks appear here).
 function renderForkGraph() {
   hideGraphTip()
+  hideGraphMenu()
   const host = $('branchGraph')
   host.innerHTML = ''
-  const { roots, children } = buildForest()
-  if (!roots.length) {
-    host.innerHTML = '<div class="gg-empty">暂无分支</div>'
+  const activeRootId = rootOf(conversationId)
+  if (!activeRootId) {
+    host.innerHTML = '<div class="gg-empty">选择上方一个主会话，查看它的分支树</div>'
     return
   }
-  let nodes = 0
-  for (const r of roots) nodes += appendGraphNode(host, r, children, true)
-  if (!nodes) host.innerHTML = '<div class="gg-empty">暂无分支</div>'
+  const { children, byId } = buildForest()
+  const root = byId.get(activeRootId)
+  if (!root) {
+    host.innerHTML = '<div class="gg-empty">选择上方一个主会话，查看它的分支树</div>'
+    return
+  }
+  appendGraphNode(host, root, children, true)
 }
+
+// ---------------------------------------------------------------------------
+// fork-graph context menu (right-click a node): jump to it or delete it.
+// ---------------------------------------------------------------------------
+const ggMenuEl = $('ggMenu')
+let ggMenuConvId = null
+
+function openGraphMenu(ev, conv) {
+  ev.preventDefault()
+  hideGraphTip()
+  const parent = conv.forkedFrom
+    ? (conversationsCache.find(c => c.id === conv.forkedFrom) || null)
+    : null
+  $('ggMenuTitle').textContent =
+    (parent ? '分支 · fork 自「' + (parent.title || '已删除') + '」' : '主会话') +
+    ' · ' + (conv.title || '未命名会话')
+  ggMenuConvId = conv.id
+  ggMenuEl.classList.add('open')
+  const mw = ggMenuEl.offsetWidth || 180
+  const mh = ggMenuEl.offsetHeight || 120
+  let left = ev.clientX
+  let top = ev.clientY
+  if (left + mw > window.innerWidth - 6) left = window.innerWidth - mw - 6
+  if (top + mh > window.innerHeight - 6) top = window.innerHeight - mh - 6
+  ggMenuEl.style.left = left + 'px'
+  ggMenuEl.style.top = top + 'px'
+}
+
+function hideGraphMenu() {
+  ggMenuEl.classList.remove('open')
+  ggMenuConvId = null
+}
+
+$('ggMenuJump').onclick = () => {
+  const id = ggMenuConvId
+  hideGraphMenu()
+  if (id) switchConversation(id)
+}
+$('ggMenuDelete').onclick = () => {
+  const id = ggMenuConvId
+  hideGraphMenu()
+  if (id) deleteSession(id)
+}
+// close on outside click / Esc / scroll or resize
+document.addEventListener('mousedown', ev => {
+  if (ggMenuEl.classList.contains('open') && !ev.target.closest('#ggMenu')) hideGraphMenu()
+})
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Escape') hideGraphMenu()
+})
+window.addEventListener('blur', hideGraphMenu)
+window.addEventListener('resize', hideGraphMenu)
 
 function resetChatArea(note) {
   messagesEl.innerHTML =
@@ -1281,6 +1511,7 @@ async function submitQuoteQuestion() {
       title: question,
       prompt,
       entry: question,
+      quote: selected, // the exact selected AI text this fork asks about
       cwd: $('cwdInput').value.trim() || undefined,
       model: $('modelSel').value || undefined,
       permissionMode: $('permSel').value,
@@ -1454,8 +1685,10 @@ document.addEventListener('mousedown', ev => {
 
 // mouseup is the primary trigger (drag or double-click to select). Wait one
 // tick so the browser finalises the selection before we read its text + rect.
+// Primary button only — a right-click (e.g. on a fork-graph node) must not
+// reopen the popup on a stale selection.
 document.addEventListener('mouseup', ev => {
-  if (running || isInsideQuotePopup(ev.target)) return
+  if (running || ev.button !== 0 || isInsideQuotePopup(ev.target)) return
   setTimeout(() => maybeShowQuotePopup(), 0)
 })
 
