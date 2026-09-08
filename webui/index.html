@@ -412,8 +412,15 @@
     padding: 4px 8px; margin-bottom: 8px;
     max-height: 72px; overflow: hidden;
   }
-  #quotePopup input {
-    width: 100%; margin-bottom: 8px;
+  #quotePopup input, #quotePopup textarea {
+    width: 100%; margin-bottom: 8px; box-sizing: border-box;
+  }
+  #quotePopup textarea {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: 8px;
+    padding: 5px 8px; font: inherit; font-size: 13px; line-height: 1.5;
+    outline: none; resize: none; overflow-y: auto;
+    min-height: 30px; max-height: 160px;
   }
   #quotePopup .qp-actions { display: flex; gap: 8px; justify-content: flex-end; }
   #quotePopup .qp-actions button { padding: 4px 12px; font-size: 12px; }
@@ -577,7 +584,7 @@
 <div id="quotePopup">
   <div class="qp-label">对选中内容追问（将 fork 一个新会话）</div>
   <div class="qp-quote" id="qpQuote"></div>
-  <input type="text" id="qpInput" placeholder="输入追问，回车发送（Esc 关闭）" />
+  <textarea id="qpInput" rows="1" placeholder="输入追问，回车发送，Shift+Enter 换行（Esc 关闭）"></textarea>
   <div class="qp-actions">
     <button id="qpCancel" class="secondary">取消</button>
     <button id="qpAsk">追问</button>
@@ -1595,7 +1602,10 @@ function maybeShowQuotePopup() {
 
   quoteSelection = { text } // capture before focusing the input clears the selection
   $('qpQuote').textContent = text.length > 160 ? text.slice(0, 160) + '…' : text
-  $('qpInput').value = ''
+  const qi = $('qpInput')
+  qi.value = ''
+  qi.style.height = 'auto'
+  qi.style.height = Math.min(qi.scrollHeight, 160) + 'px'
   pop.classList.add('open')
 
   const rect = range.getBoundingClientRect()
@@ -2034,7 +2044,7 @@ $('qpAsk').onclick = submitQuoteQuestion
 $('qpCancel').onclick = hideQuotePopup
 $('qpInput').addEventListener('keydown', ev => {
   if (ev.isComposing) return // IME composition confirm — don't submit mid-typing
-  if (ev.key === 'Enter') {
+  if (ev.key === 'Enter' && !ev.shiftKey) {
     ev.preventDefault()
     submitQuoteQuestion()
   } else if (ev.key === 'Escape') {
@@ -2042,6 +2052,19 @@ $('qpInput').addEventListener('keydown', ev => {
     hideQuotePopup()
   }
 })
+// auto-grow the follow-up box with its content (like the composer), keep on-screen
+const autoGrowQp = () => {
+  const t = $('qpInput')
+  t.style.height = 'auto'
+  t.style.height = Math.min(t.scrollHeight, 160) + 'px'
+  const pop = $('quotePopup')
+  if (!pop.classList.contains('open')) return
+  const r = pop.getBoundingClientRect()
+  if (r.bottom > window.innerHeight - 8) {
+    pop.style.top = Math.max(8, window.innerHeight - r.height - 8) + 'px'
+  }
+}
+$('qpInput').addEventListener('input', autoGrowQp)
 
 // scrolling moves the selected text away from the popup → close it.
 messagesEl.addEventListener('scroll', hideQuotePopup)

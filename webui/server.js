@@ -18,7 +18,7 @@
 'use strict'
 
 const http = require('node:http')
-const { spawn } = require('node:child_process')
+const { spawn, execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -90,11 +90,12 @@ deliberately stripped so no previously wired-in key is used.`)
 // one-shot CLI session (mirrors desktop/electron/cliRunner.cjs strategy)
 // ---------------------------------------------------------------------------
 class CliSession {
-  constructor({ cwd, settings, model, thinking, env, permissionMode, resumeSessionId, forkSession, onEvent }) {
+  constructor({ cwd, settings, model, thinking, env, permissionMode, resumeSessionId, resumeJsonl, forkSession, onEvent }) {
     this.cwd = cwd
     this.onEvent = onEvent
     this.env = env
-    this.resumeSessionId = resumeSessionId || null
+    this.resumeSessionId = resumeSessionId || null // resume by session id (same project dir)
+    this.resumeJsonl = resumeJsonl || null // resume by explicit transcript path (legacy convs, any cwd)
     this.forkSession = Boolean(forkSession) // resume into a NEW session id
     this.sessionId = null // CLI session id, captured from stream events
     this.child = null
@@ -124,8 +125,12 @@ class CliSession {
     // Continue an existing conversation: the CLI loads the transcript and
     // appends the new turn, keeping multi-turn context. With forkSession the
     // turn lands in a NEW session id, leaving the source transcript intact.
-    if (this.resumeSessionId) {
-      args.push('--resume', this.resumeSessionId)
+    // resumeJsonl is the fallback for older conversations whose transcript
+    // lives in another project dir: `--resume <path>.jsonl` makes the CLI read
+    // that exact file directly, regardless of the cwd it is spawned under.
+    const resumeArg = this.resumeJsonl || this.resumeSessionId
+    if (resumeArg) {
+      args.push('--resume', resumeArg)
       if (this.forkSession) args.push('--fork-session')
     }
     args.push('-p', prompt)
@@ -284,6 +289,50 @@ function saveConfig(cfg) {
 // one the user configured in the UI — any ANTHROPIC_API_KEY / AUTH_TOKEN /
 // MODEL from the ambient shell are deliberately stripped so the previously
 // wired-in key stops being used.
+//
+// The bundled CLI on Windows locates git-bash on its own by asking `where.exe
+// git` and deriving the bash path next to it. That heuristic breaks on some
+// installs (e.g. Git under D:\Program Files\Git with where.exe returning the
+// mingw64\bin\git.exe first — the derived bash.exe does not exist), so the CLI
+// aborts every run at startup with "requires git-bash". We probe for a real
+// bash.exe ourselves and hand it to the CLI via CLAUDE_CODE_GIT_BASH_PATH,
+// which the CLI trusts verbatim (it checks that env var first).
+function resolveGitBash() {
+  const candidates = []
+  const maybe = p => {
+    try { return fs.statSync(p).isFile() ? p : null } catch { return null }
+  }
+  // 1. explicit override already in our environment
+  if (process.env.CLAUDE_CODE_GIT_BASH_PATH) {
+    const hit = maybe(process.env.CLAUDE_CODE_GIT_BASH_PATH)
+    if (hit) return hit
+  }
+  // 2. ask where git is, walk up from git.exe until a sibling bin\bash.exe appears
+  try {
+    const out = execFileSync('where.exe', ['git'], { encoding: 'utf8' })
+    for (const line of out.split(/\r?\n/)) {
+      const gitExe = line.trim()
+      if (!gitExe) continue
+      let dir = path.dirname(gitExe)
+      for (let up = 0; up < 6 && dir !== path.dirname(dir); up += 1) {
+        const hit = maybe(path.join(dir, 'bin', 'bash.exe'))
+        if (hit) return hit
+        dir = path.dirname(dir)
+      }
+    }
+  } catch { /* where.exe unavailable — fall through */ }
+  // 3. common install roots (Program Files on every fixed drive)
+  const roots = new Set()
+  for (const drive of 'CDEF') roots.add(path.join(`${drive}:`, 'Program Files', 'Git', 'bin', 'bash.exe'))
+  roots.add('C:\\Program Files (x86)\\Git\\bin\\bash.exe')
+  roots.add('D:\\Program Files (x86)\\Git\\bin\\bash.exe')
+  for (const p of roots) {
+    const hit = maybe(p)
+    if (hit) return hit
+  }
+  return null
+}
+
 function buildChildEnv(config) {
   const env = { ...process.env }
   delete env.ANTHROPIC_API_KEY
@@ -297,6 +346,10 @@ function buildChildEnv(config) {
     env.ANTHROPIC_API_KEY = key
     env.ANTHROPIC_AUTH_TOKEN = key
   }
+  if (process.platform === 'win32') {
+    const bash = resolveGitBash()
+    if (bash) env.CLAUDE_CODE_GIT_BASH_PATH = bash
+  }
   return env
 }
 
@@ -306,7 +359,7 @@ function buildChildEnv(config) {
 // readable history from that file (user prompts live in `queue-operation
 // enqueue` records, assistant text/thinking/tool_use arrive as per-block events).
 // ---------------------------------------------------------------------------
-function findTranscriptFile(sessionId) {
+function findTranscriptFile(sessionId, preferProjectDir) {
   if (!sessionId) return null
   const base = path.join(os.homedir(), '.claude', 'projects')
   let dirs = []
@@ -315,7 +368,15 @@ function findTranscriptFile(sessionId) {
   } catch {
     return null
   }
-  for (const dir of dirs) {
+  // The conversation's own project dir (when known) is authoritative. If a
+  // legacy transcript was resumed and re-homed into the current cwd, the copy
+  // there must win over the older one left in the source dir. preferProjectDir
+  // is only an ordering hint — the scan still falls back to every project dir.
+  dirs.sort()
+  const order = preferProjectDir
+    ? [preferProjectDir, ...dirs.filter(d => d !== preferProjectDir)]
+    : dirs
+  for (const dir of order) {
     if (dir.startsWith('.')) continue
     const fp = path.join(base, dir, sessionId + '.jsonl')
     try {
@@ -325,6 +386,35 @@ function findTranscriptFile(sessionId) {
     }
   }
   return null
+}
+
+// The project folder (encoded cwd) a conversation's transcript should live in,
+// from the conversation's pinned cwd. Null when the cwd is unknown.
+function convProjectDir(conv) {
+  return conv && conv.cwd ? encodeProjectDirName(conv.cwd) : null
+}
+
+// The CLI names a transcript's project folder after its working directory,
+// keeping [A-Za-z0-9._-] and replacing every other character with '-'. A
+// `--resume <id>` only finds a transcript that lives in the project folder of
+// the cwd it is started from — the same cwd the session originally ran under.
+// Forking/continuing from a different directory therefore fails with an opaque
+// "No conversation found" (CLI exit 1), which is why we record each
+// conversation's own cwd and always resume from it.
+function encodeProjectDirName(absPath) {
+  let out = ''
+  for (const ch of String(absPath)) out += /[A-Za-z0-9._-]/.test(ch) ? ch : '-'
+  return out
+}
+
+function transcriptAtSessionCwd(sessionId, cwd) {
+  if (!sessionId || !cwd) return null
+  const fp = path.join(os.homedir(), '.claude', 'projects', encodeProjectDirName(cwd), sessionId + '.jsonl')
+  try {
+    return fs.statSync(fp).isFile() ? fp : null
+  } catch {
+    return null
+  }
 }
 
 function parseTranscriptTurns(file) {
@@ -561,7 +651,7 @@ function createServer(opts) {
       if (m) {
         const conv = conversations.get(m[1])
         if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
-        const file = findTranscriptFile(conv.cliSessionId)
+        const file = findTranscriptFile(conv.cliSessionId, convProjectDir(conv))
         const turns = file ? parseTranscriptTurns(file) : []
         sendJson(res, 200, {
           id: conv.id,
@@ -593,7 +683,7 @@ function createServer(opts) {
           x => x.cliSessionId && x.cliSessionId === conv.cliSessionId,
         )
         if (!owners.length) {
-          const file = findTranscriptFile(conv.cliSessionId)
+          const file = findTranscriptFile(conv.cliSessionId, convProjectDir(conv))
           if (file) {
             try {
               fs.unlinkSync(file)
@@ -641,6 +731,15 @@ function createServer(opts) {
         if (!String(config.apiKey || '').trim()) {
           return sendJson(res, 409, { error: '尚未配置 DeepSeek API Key，请在页面顶部填写并保存。' })
         }
+        // The directory a conversation runs under determines which project
+        // folder its transcript is stored in (~/.claude/projects/<encoded
+        // cwd>/<sessionId>.jsonl). A --resume only finds a transcript under
+        // the SAME cwd the session was originally started in, so each
+        // conversation pins its own cwd and forks/continuations resume from
+        // that pinned cwd — not from whatever directory the user has selected
+        // right now. New conversations inherit the user's current selection.
+        const fallbackCwd = body.cwd || opts.cwd || ROOT
+        let runCwd = fallbackCwd
         let conv = null
         let forkSession = false
         if (body.forkFrom) {
@@ -652,6 +751,9 @@ function createServer(opts) {
           if (src.running) {
             return sendJson(res, 409, { error: '源会话有任务在运行，请先停止。' })
           }
+          // A fork branches off the source transcript, so it must run from the
+          // source conversation's own cwd (the folder its transcript lives in).
+          runCwd = src.cwd || fallbackCwd
           conv = {
             id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
             title: String(body.title || prompt).slice(0, 40),
@@ -659,6 +761,7 @@ function createServer(opts) {
             forkQuote: String(body.quote || '').slice(0, 600), // the selected AI text this fork asked about
             cliSessionId: src.cliSessionId,
             forkedFrom: src.id,
+            cwd: runCwd,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             running: false,
@@ -668,22 +771,47 @@ function createServer(opts) {
         } else if (body.conversationId) {
           conv = conversations.get(String(body.conversationId)) || null
           if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
+          runCwd = conv.cwd || fallbackCwd
         }
         if (conv && conv.running) {
           return sendJson(res, 409, { error: '该会话已有任务在运行，请先停止。' })
         }
         if (!conv) {
+          runCwd = fallbackCwd
           conv = {
             id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
             title: String(body.title || prompt).slice(0, 40),
             entryPrompt: String(body.entry || prompt).slice(0, 600), // first msg of this branch
             cliSessionId: null,
+            cwd: runCwd,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             running: false,
           }
           conversations.set(conv.id, conv)
         }
+
+        // Resuming a session whose transcript is not under runCwd would make
+        // the CLI exit(1) with a bare "No conversation found". Newer
+        // conversations pin their own cwd so the transcript is always there.
+        // For older conversations (recorded before cwd was tracked) whose
+        // transcript lives in another project dir, hand the CLI the
+        // transcript's exact path — `--resume <path>.jsonl` reads that file
+        // from any cwd. Only when the transcript is gone entirely do we give
+        // up and explain.
+        let resumeJsonl = null
+        if (conv.cliSessionId) {
+          const located = findTranscriptFile(conv.cliSessionId, convProjectDir(conv))
+          if (!located) {
+            return sendJson(res, 409, {
+              error: '该会话的上下文已丢失（从未成功运行或已被清理），无法继续。请新建对话重试。',
+            })
+          }
+          if (!transcriptAtSessionCwd(conv.cliSessionId, runCwd)) {
+            resumeJsonl = located
+          }
+        }
+
         const chatId = String(body.chatId || `chat-${Date.now()}`)
         conv.running = true
         touchConversation(conv)
@@ -692,18 +820,25 @@ function createServer(opts) {
           ? String(body.thinking).trim()
           : null
         const session = new CliSession({
-          cwd: body.cwd || opts.cwd || ROOT,
+          cwd: runCwd,
           settings: body.settings || opts.settings || null,
           model: resolveModel(body.model) || resolveModel(opts.model) || resolveModel('flash'),
           thinking,
           env: buildChildEnv(config),
           permissionMode: body.permissionMode || 'acceptEdits',
           resumeSessionId: convRef.cliSessionId,
+          resumeJsonl,
           forkSession,
           onEvent: ev => {
             // Track the CLI session id so the next message can --resume it.
             if (ev.session_id && ev.session_id !== convRef.cliSessionId) {
               convRef.cliSessionId = ev.session_id
+              touchConversation(convRef)
+            }
+            // Pin the cwd the CLI actually reports (init event) so later
+            // forks/continuations resume from the right folder.
+            if (ev.type === 'system' && ev.cwd && ev.cwd !== convRef.cwd) {
+              convRef.cwd = ev.cwd
               touchConversation(convRef)
             }
             broadcast({ chatId, ...ev })
