@@ -237,6 +237,91 @@ function saveConversations(map) {
 }
 
 // ---------------------------------------------------------------------------
+// transcript reading (history view): the CLI stores each conversation's events
+// as JSONL under ~/.claude/projects/<project>/<sessionId>.jsonl. We rebuild the
+// readable history from that file (user prompts live in `queue-operation
+// enqueue` records, assistant text/thinking/tool_use arrive as per-block events).
+// ---------------------------------------------------------------------------
+function findTranscriptFile(sessionId) {
+  if (!sessionId) return null
+  const base = path.join(os.homedir(), '.claude', 'projects')
+  let dirs = []
+  try {
+    dirs = fs.readdirSync(base)
+  } catch {
+    return null
+  }
+  for (const dir of dirs) {
+    if (dir.startsWith('.')) continue
+    const fp = path.join(base, dir, sessionId + '.jsonl')
+    try {
+      if (fs.statSync(fp).isFile()) return fp
+    } catch {
+      /* not this project dir — keep looking */
+    }
+  }
+  return null
+}
+
+function parseTranscriptTurns(file) {
+  const turns = []
+  const events = []
+  for (const ln of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const s = ln.trim()
+    if (!s) continue
+    try {
+      events.push(JSON.parse(s))
+    } catch {
+      /* skip malformed lines */
+    }
+  }
+  // tool_use ids that eventually received a tool_result => their card is "done"
+  const resolved = new Set()
+  for (const o of events) {
+    if (o.type !== 'user') continue
+    for (const b of o.message?.content || []) {
+      if (b && b.tool_use_id) resolved.add(b.tool_use_id)
+    }
+  }
+  let cur = null
+  for (const o of events) {
+    if (o.type === 'queue-operation' && o.operation === 'enqueue') {
+      cur = {
+        prompt: typeof o.content === 'string' ? o.content : '',
+        ts: o.timestamp || null,
+        blocks: [],
+      }
+      turns.push(cur)
+      continue
+    }
+    if (!cur) continue
+    if (o.type === 'assistant') {
+      const msg = o.message
+      // resume-loading boilerplate the CLI inserts ("Continue from where you
+      // left off." paired with a synthetic "No response requested." assistant)
+      if (!msg || msg.model === '<synthetic>') continue
+      for (const b of msg.content || []) {
+        if (!b) continue
+        if (b.type === 'thinking') {
+          cur.blocks.push({ type: 'think', text: String(b.thinking || '') })
+        } else if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+          cur.blocks.push({ type: 'text', text: b.text })
+        } else if (b.type === 'tool_use') {
+          cur.blocks.push({
+            type: 'tool',
+            id: b.id,
+            name: b.name || 'tool',
+            input: b.input || {},
+            done: resolved.has(b.id),
+          })
+        }
+      }
+    }
+  }
+  return turns
+}
+
+// ---------------------------------------------------------------------------
 // HTTP + SSE server
 // ---------------------------------------------------------------------------
 function createServer(opts) {
@@ -250,6 +335,18 @@ function createServer(opts) {
     conv.updatedAt = Date.now()
     saveConversations(conversations)
   }
+
+  // A restart kills every child CLI process, so any conversation still flagged
+  // as "running" can never finish on its own — clear the flag or the session
+  // would be stuck undeletable and permanently shown as running.
+  let stale = false
+  for (const conv of conversations.values()) {
+    if (conv.running) {
+      conv.running = false
+      stale = true
+    }
+  }
+  if (stale) saveConversations(conversations)
 
   function broadcast(event) {
     eventLog.push(event)
@@ -325,6 +422,49 @@ function createServer(opts) {
         }))
       sendJson(res, 200, list)
       return
+    }
+
+    // Full history for one conversation, rebuilt from the CLI transcript.
+    if (req.method === 'GET') {
+      const m = p.match(/^\/api\/conversations\/([^/]+)\/messages$/)
+      if (m) {
+        const conv = conversations.get(m[1])
+        if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
+        const file = findTranscriptFile(conv.cliSessionId)
+        const turns = file ? parseTranscriptTurns(file) : []
+        sendJson(res, 200, {
+          id: conv.id,
+          title: conv.title,
+          running: conv.running,
+          cliSessionId: conv.cliSessionId,
+          turns,
+        })
+        return
+      }
+    }
+
+    // Delete a conversation (record + its CLI transcript).
+    if (req.method === 'DELETE') {
+      const m = p.match(/^\/api\/conversations\/([^/]+)$/)
+      if (m) {
+        const conv = conversations.get(m[1])
+        if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
+        if (conv.running) {
+          return sendJson(res, 409, { error: '该会话正在运行，请先停止。' })
+        }
+        conversations.delete(m[1])
+        saveConversations(conversations)
+        const file = findTranscriptFile(conv.cliSessionId)
+        if (file) {
+          try {
+            fs.unlinkSync(file)
+          } catch {
+            /* best effort */
+          }
+        }
+        sendJson(res, 200, { ok: true })
+        return
+      }
     }
 
     if (req.method === 'POST') {

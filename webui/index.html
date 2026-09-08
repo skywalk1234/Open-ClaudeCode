@@ -55,9 +55,18 @@
   }
   .sess-item:hover { background: var(--panel-2); }
   .sess-item.active { background: var(--panel-2); border-color: var(--accent); }
+  .sess-item .sess-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .sess-item .s-title {
+    flex: 1; min-width: 0;
     font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .sess-del {
+    flex: none; border: none; background: transparent; color: var(--muted);
+    cursor: pointer; font-size: 12px; line-height: 1; padding: 3px 5px; border-radius: 6px;
+    visibility: hidden;
+  }
+  .sess-item:hover .sess-del, .sess-item.active .sess-del { visibility: visible; }
+  .sess-del:hover { color: var(--red); background: rgba(199, 68, 46, 0.12); }
   .sess-item .s-time {
     font-size: 11px; color: var(--muted); margin-top: 2px;
     display: flex; justify-content: space-between; gap: 6px;
@@ -201,12 +210,8 @@
   @keyframes thinkDot { 40% { opacity: 1; } }
 
   .tool {
+    /* frameless: no outer panel/box — just the tool name + summary text + state icon */
     margin: 8px 0;
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    background: var(--panel);
-    padding: 8px 12px;
     font-size: 12.5px;
   }
   .tool .tool-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -227,8 +232,6 @@
   .tool .done::after { content: '✓'; }
   .tool:not(.running) .spinner { display: none; }
   .tool:not(.running) .done { display: flex; }
-  .tool.running { animation: toolPulse 1.6s ease-in-out infinite; }
-  @keyframes toolPulse { 50% { border-color: var(--accent); } }
 
   .error-msg { color: var(--red); }
 
@@ -892,10 +895,15 @@ function renderSessionList() {
     item.className = 'sess-item' + (c.id === conversationId ? ' active' : '')
     item.title = c.title || ''
     item.innerHTML =
-      '<div class="s-title">' + esc(c.title || '未命名会话') + '</div>' +
+      '<div class="sess-head"><span class="s-title">' + esc(c.title || '未命名会话') + '</span>' +
+      '<button class="sess-del" title="删除会话">✕</button></div>' +
       '<div class="s-time"><span>' + esc(fmtTime(c.updatedAt)) + '</span>' +
       (c.running ? '<span class="s-running">运行中</span>' : '') + '</div>'
     item.onclick = () => switchConversation(c.id)
+    item.querySelector('.sess-del').onclick = ev => {
+      ev.stopPropagation()
+      deleteSession(c.id)
+    }
     list.appendChild(item)
   }
 }
@@ -910,7 +918,7 @@ function resetChatArea(note) {
     '</div>'
 }
 
-function switchConversation(id) {
+async function switchConversation(id) {
   if (running) {
     setStatus('请先停止当前任务再切换会话', 'error')
     return
@@ -922,10 +930,70 @@ function switchConversation(id) {
   stream = null
   turnBubble = null
   endAllToolRuns()
-  resetChatArea('会话: ' + (conv ? conv.title : id))
   renderSessionList()
+  messagesEl.innerHTML = '<div class="empty" id="emptyState"><h2>加载中…</h2></div>'
   setStatus('空闲', 'idle')
+  try {
+    const res = await fetch('/api/conversations/' + encodeURIComponent(id) + '/messages')
+    if (!res.ok) throw new Error(res.statusText)
+    const data = await res.json()
+    const empty = $('emptyState')
+    if (empty) empty.remove()
+    const turns = data.turns || []
+    if (!turns.length) {
+      resetChatArea('会话: ' + (conv ? conv.title : id))
+    } else {
+      for (const t of turns) renderTurn(t)
+      messagesEl.scrollTop = messagesEl.scrollHeight
+    }
+  } catch (err) {
+    resetChatArea('会话加载失败: ' + err.message)
+  }
   $('promptInput').focus()
+}
+
+// render one stored exchange (user prompt + one assistant turn) into messagesEl
+function renderTurn(t) {
+  const prompt = t.prompt || ''
+  if (prompt) {
+    const user = document.createElement('div')
+    user.className = 'msg user'
+    user.innerHTML = '<div class="avatar">我</div><div class="bubble"><div class="content">' +
+      renderMarkdown(prompt) + '</div></div>'
+    messagesEl.appendChild(user)
+  }
+  const asst = document.createElement('div')
+  asst.className = 'msg assistant'
+  const avatar = document.createElement('div')
+  avatar.className = 'avatar'
+  avatar.textContent = 'AI'
+  const bubble = document.createElement('div')
+  bubble.className = 'bubble'
+  asst.appendChild(avatar)
+  asst.appendChild(bubble)
+  for (const b of t.blocks || []) {
+    if (b.type === 'think' && b.text) {
+      const details = document.createElement('details')
+      details.className = 'think'
+      details.innerHTML = '<summary><span class="tlabel">已深度思考</span></summary><div class="think-body"></div>'
+      details.querySelector('.think-body').textContent = b.text
+      bubble.appendChild(details)
+    } else if (b.type === 'text') {
+      const content = document.createElement('div')
+      content.className = 'content'
+      content.innerHTML = renderMarkdown(b.text || '')
+      bubble.appendChild(content)
+    } else if (b.type === 'tool') {
+      const div = document.createElement('div')
+      div.className = 'tool' + (b.done ? '' : ' running')
+      div.innerHTML =
+        '<div class="tool-head"><span class="spinner"></span><span class="done"></span>' +
+        '<span class="tname">' + esc(b.name || 'tool') + '</span><span class="tcmd"></span></div>'
+      div.querySelector('.tcmd').textContent = toolCmdText(b.input)
+      bubble.appendChild(div)
+    }
+  }
+  messagesEl.appendChild(asst)
 }
 
 function newConversation() {
@@ -942,6 +1010,36 @@ function newConversation() {
   renderSessionList()
   setStatus('空闲', 'idle')
   $('promptInput').focus()
+}
+
+async function deleteSession(id) {
+  const conv = conversationsCache.find(c => c.id === id)
+  if (!conv) return
+  if (conv.running) {
+    setStatus('运行中的会话不能删除', 'error')
+    return
+  }
+  const title = (conv.title || '未命名会话').slice(0, 24)
+  if (!confirm('删除会话「' + title + '」？\n会同时删除它的本地记录，无法恢复。')) return
+  try {
+    const res = await fetch('/api/conversations/' + encodeURIComponent(id), { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || res.statusText)
+    }
+  } catch (err) {
+    setStatus('删除失败: ' + err.message, 'error')
+    return
+  }
+  if (conversationId === id) {
+    conversationId = null
+    chatId = null
+    stream = null
+    turnBubble = null
+    resetChatArea()
+  }
+  loadConversations()
+  setStatus('空闲', 'idle')
 }
 
 async function post(url, body) {
