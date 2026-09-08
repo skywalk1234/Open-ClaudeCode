@@ -1,83 +1,23 @@
-# Open-ClaudeCode
+# Open-ClaudeCode（Web UI 版）
 
-> 完整开源的 Claude Code 项目 - 基于 Anthropic 官方源码重建
+> 在 [Open-ClaudeCode](https://github.com/LING71671/Open-ClaudeCode)（完整开源的 Claude Code 重建项目）基础上，新增了一个**纯本地 Web UI 聊天界面**，并围绕它扩展了会话管理、对话 Fork、历史恢复等能力。
 
-🌐 **Languages**: [中文](README.md) | [English](README.en.md)
-
----
-
-## 🙏 特别感谢
-
-**本项目由衷感谢 Anthropic 公司的开源贡献！**
-
-Anthropic 通过 npm 包发布 Claude Code，使我们能够学习和研究这个优秀的 AI 编程助手架构。本项目的源码是从官方 npm 包的 source map 中恢复的，仅供学习和研究使用。
-
-> "您说的对，我不应该把map文件一并发布到npm中，这是一个非常严重的错误。"
-
-我们理解 source map 文件本应用于开发调试，而非公开发布。Anthropic 对此问题的认识和处理方式值得我们学习。
+本 README 主要介绍 **Web UI 的启动方式、界面操作与新增功能**。原始项目的完整说明见 [README_origin.md](README_origin.md)，英文版见 [README.en.md](README.en.md)。
 
 ---
 
-## 📖 项目简介
+## ✨ 新增功能一览
 
-Open-ClaudeCode 是一个完整的 Claude Code 开源版本，包含：
-
-- ✅ **可运行的 CLI** - 编译后的完整可执行文件 (v2.1.88)
-- ✅ **TypeScript 源码** - 1,902 个恢复的源文件供学习研究
-- ✅ **官方插件** - 13 个 Anthropic 官方插件
-- ✅ **配置示例** - 多种场景的 settings 配置
-- ✅ **完整文档** - 项目说明、使用指南、CHANGELOG
-
----
-
-## 📁 目录结构
-
-```
-Open-ClaudeCode/
-├── package/              # 可运行的 CLI
-│   ├── cli.js            # 编译后的 CLI (12.5MB)
-│   ├── cli.js.map        # Source Map (57MB)
-│   ├── package.json      # 包配置
-│   ├── bun.lock          # Bun 锁文件
-│   ├── sdk-tools.d.ts    # SDK 类型定义 (117KB)
-│   └── vendor/           # 原生二进制模块
-│       ├── audio-capture/   # 音频捕获 (6 平台)
-│       └── ripgrep/         # 代码搜索工具 (6 平台)
-├── src/                  # 完整 TypeScript 源码 (1,902 文件)
-│   ├── tools/            # 30+ 工具实现 (184 文件)
-│   ├── commands/         # 50+ 命令实现 (207 文件)
-│   ├── services/         # API、MCP、OAuth 服务 (130 文件)
-│   ├── components/       # React UI 组件 (389 文件)
-│   ├── ink/              # Ink UI 框架 (96 文件)
-│   ├── utils/            # 工具函数 (564 文件)
-│   ├── hooks/            # React Hooks (104 文件)
-│   ├── bridge/           # 桥接模块 (31 文件)
-│   ├── vendor/           # 原生模块源码 (4 文件)
-│   └── ...               # 更多模块
-├── plugins/              # 13 个官方插件
-│   ├── agent-sdk-dev/
-│   ├── claude-opus-4-5-migration/
-│   ├── code-review/
-│   ├── commit-commands/
-│   ├── explanatory-output-style/
-│   ├── feature-dev/
-│   ├── frontend-design/
-│   ├── hookify/
-│   ├── learning-output-style/
-│   ├── plugin-dev/
-│   ├── pr-review-toolkit/
-│   ├── ralph-wiggum/
-│   └── security-guidance/
-├── examples/             # 配置示例
-│   └── settings/         # strict / lax / bash-sandbox
-├── docs/                 # 文档
-├── README.md             # 本文件
-├── ACKNOWLEDGEMENTS.md   # 感谢声明
-├── CHANGELOG.md          # 版本更新记录
-├── LICENSE               # 许可证说明
-├── .gitignore            # Git 忽略规则
-└── .gitattributes        # Git 属性
-```
+- 🖥️ **Web UI 图形界面** — 无需 Electron，纯 Node.js 实现，浏览器访问即可聊天
+- 💬 **会话管理** — 左侧「会话」列表、一键「＋ 新建会话」，会话记录自动持久化，服务重启后仍在
+- 🕘 **历史记录恢复** — 点开会话即从本地 transcript 恢复完整聊天历史，并支持**多轮上下文续聊**（自动 `--resume`）
+- 🔀 **选中追问 / 对话 Fork** — 选中 AI 回复中的任意一段文本，即可基于该片段 Fork 出一个**新会话**单独追问，原会话不受影响
+- 🌳 **Fork 图谱** — git graph 风格的分支树，直观展示主会话与各 Fork 分支的派生关系，悬浮可预览引用片段
+- 🗑️ **级联删除** — 删除主会话会连同其下所有 Fork 分支（含子 Fork）一起删除，并清理对应的本地历史文件
+- 📂 **自由选择工作目录** — 内置目录选择器，可让 CLI 在任意项目目录下工作，每个会话都会固定住自己的目录
+- ⚡ **实时流式渲染** — 思考过程、文本回复与工具调用在同一气泡内流式展示：思考可折叠、工具带旋转动效与 ✓ 完成标记
+- 🛡️ **工具权限弹窗** — CLI 请求使用工具时在页面弹出「允许 / 拒绝」，无需切换到终端
+- 🧠 **模型 / 思考 / 权限模式** — 顶部可直接选择模型（flash / pro）、思考强度与权限模式
 
 ---
 
@@ -85,441 +25,136 @@ Open-ClaudeCode/
 
 ### 前置要求
 
-- **Node.js 18+** ([下载](https://nodejs.org/))
-- **API 密钥**（任选一种）：
-  - 🔵 **Anthropic 官方 API** — 在 [console.anthropic.com](https://console.anthropic.com/) 注册获取 API Key
-  - 🟢 **第三方代理** — 国内用户推荐，获取代理地址和 API Key
-  > ⚠️ **OpenAI 格式代理**（如 MiniMax、OpenRouter 等）请使用 [Universal-AI-Protocol-Bridge](https://github.com/LING71671/Universal-AI-Protocol-Bridge) 进行协议转换
-  - 🔴 **Claude 订阅账号** — 运行后通过 OAuth 登录（需科学上网）
+- **Node.js 18+**（[下载](https://nodejs.org/)）
+- **DeepSeek API Key**（在 [platform.deepseek.com](https://platform.deepseek.com/) 获取）
+- 仓库自带的编译产物 `package/cli.js`（克隆后已存在，Web UI 依赖它执行命令）
+- Windows 上还需安装 **Git for Windows**（CLI 依赖 git-bash 执行命令，服务会自动探测 bash.exe 路径）
 
-### 第一步：克隆并运行
+> 说明：当前 Web UI 仅对接 **DeepSeek 的 Anthropic 兼容网关**（`https://api.deepseek.com/anthropic`），暂不支持官方 Anthropic 与其它代理。想在命令行使用其它接入方式的同学请参考 README_origin.md。
+
+### 启动方式
+
+**Windows（推荐）：双击 `start-webui.cmd`**
+
+脚本会自动打开浏览器访问 `http://127.0.0.1:8787`，`Ctrl+C` 停止。
+
+```bat
+start-webui.cmd            :: 默认端口 8787
+start-webui.cmd 8788       :: 指定端口（端口被占用时可用）
+set NO_BROWSE=1            :: 不自动打开浏览器
+set NO_PAUSE=1             :: 退出前不暂停（供脚本调用）
+```
+
+**跨平台：直接用 Node 启动**
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/LING71671/Open-ClaudeCode.git
-cd Open-ClaudeCode
-
-# 2. 验证环境
-node --version          # 需要 >= 18.0.0
-node package/cli.js --version  # 应显示 2.1.88
-
-# 3. 启动！
-node package/cli.js
+node webui/server.js [--port 8787] [--cwd /path/to/project] [--settings settings.json] [--model deepseek-v4-pro]
 ```
 
-### 第二步：认证
+服务仅监听 `127.0.0.1`（本机），启动后访问 <http://127.0.0.1:8787>。
 
-首次运行需要认证，选择以下**任一方式**：
+### 第一次使用
 
-#### 方式一：第三方代理（国内推荐 🇨🇳）
-
-适合中国大陆用户，无需科学上网：
-
-1. 获取第三方代理的 API 地址和密钥
-2. 创建 `settings.json`：
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://你的代理地址",
-    "ANTHROPIC_AUTH_TOKEN": "sk-你的密钥"
-  }
-}
-```
-3. 运行：`node package/cli.js --settings settings.json`
-
-#### 方式二：Anthropic 官方 API
-
-1. 访问 [console.anthropic.com](https://console.anthropic.com/) 注册账号
-2. 获取 API Key（格式 `sk-ant-...`）
-3. 创建 `settings.json`：
-```json
-{
-  "env": {
-    "ANTHROPIC_AUTH_TOKEN": "sk-ant-你的密钥"
-  }
-}
-```
-4. 运行：`node package/cli.js --settings settings.json`
-
-#### 方式三：Claude 订阅账号（OAuth）
-
-需要 Claude 订阅 + 科学上网：
-
-```bash
-# 直接运行，会自动打开浏览器登录
-node package/cli.js
-```
+1. 打开页面后，**先配置 DeepSeek API Key**：
+   在顶部输入框填入 `sk-…` 并点击「保存 Key」。Key 只会保存在本机
+   `~/.opc-webui/config.json`，不会写入仓库，服务重启后自动读取；
+   输入框留空再点保存可清除。页面只会回显 Key 的后 4 位。
+2. 在下方输入框提问，回车发送（`Shift+Enter` 换行）。
+3. 当 CLI 请求使用工具（执行命令 / 读写文件等）时，页面会弹出授权框，点击「允许 / 拒绝」。
 
 ---
 
-## 🖥️ 运行截图
+## 🖥️ 界面与操作说明
 
-![Open-ClaudeCode 运行截图](./test.png)
+### 顶部工具栏
 
----
+| 控件               | 说明                                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| 权限               | 本次会话的权限模式：`acceptEdits`（默认，自动接受文件编辑）、`default`（逐项询问）、`plan`（只读计划）、`bypassPermissions`（全放行） |
+| 目录               | 显示当前工作目录，点击「选择…」弹出**目录选择器**；显示「仓库根目录」表示使用服务默认目录                                            |
+| DeepSeek API Key | 配置 / 清除 API Key，旁有点位提示是否已配置                                                                |
+| 状态灯              | 空闲 / 运行中 / 重连中 / 出错等运行状态                                                                   |
 
-## 📖 使用教程
+> 权限、目录、模型、思考的修改会在**下一次发送**时生效。
 
-### 模式一：交互模式（推荐新手）
+### 发送区
 
-直接运行，像聊天一样对话：
+- **模型**：`flash（快）` / `pro（更强）`（对应模型 `deepseek-v4-flash` / `deepseek-v4-pro`）
+- **思考**：`自动`（adaptive，默认）/ `关闭`（disabled）/ `深度`（enabled）
+- 输入框随内容自动增高；右侧「发送」「停止」按钮，运行中可随时停止当前任务
 
-```bash
-node package/cli.js
-```
+### 左侧栏：会话与 Fork 图谱
 
-进入后你会看到交互界面，可以直接输入问题或指令：
+- **会话列表**：只展示**主会话**（main），标题、更新时间、运行中状态一目了然。
+  - 点击「＋ 新建会话」开始一个全新对话
+  - 点击会话标题切换并恢复历史；悬停可点「✕」删除
+  - 会话正在运行时不能切换 / 新建 / 删除（需先「停止」）
+- **FORK 图谱**：展示当前主会话下的**分支树**（含 Fork 与多层子 Fork）。
+  - **选中某段文本「追问」后，派生出的 Fork 会以 `↳` 缩进挂在源会话下面**
+  - 悬浮节点可预览引用片段 / 首条消息
+  - **右键节点**弹出菜单：切换到该会话 / 删除该会话
+- 侧栏与正文之间的分隔条可**左右拖动**调整宽度，宽度会被记住
 
-```
-> 帮我创建一个 Python Flask 项目
-> 解释一下这段代码
-> 帮我修复这个 bug
-```
+### 🔀 核心新玩法：选中文本 → Fork 追问
 
-**常用操作：**
-- 输入文字 → 按 Enter 发送
-- `Ctrl+C` → 中断当前操作
-- `/help` → 查看所有可用命令
-- `/clear` → 清空对话
-- `/exit` → 退出
+1. 在 AI 的回复中**用鼠标选中一段文字**（拖选或双击，键盘 Shift+方向键选择也可）；
+2. 选中处会弹出「对选中内容追问」浮层，显示所选片段与追问输入框；
+3. 输入追问后回车——系统会基于源会话的完整上下文 **Fork 出一个新会话**（源会话保持不变），新分支带着你选中的引用进入回复。
 
-### 模式二：非交互模式（脚本/管道）
+适合边问边改思路的场景：对同一段答案的不同方向分别开新分支，互不干扰。
 
-适合自动化、脚本调用：
+### 目录选择器
 
-```bash
-# 简单问答
-node package/cli.js -p "解释一下什么是闭包"
+- 支持逐级浏览目录（含 Windows 磁盘盘符列表）、快速跳转「仓库根 / 主目录 / 当前选择」
+- 也可以直接输入绝对路径回车跳转
+- 每个会话都会**固定自己运行时的目录**，Fork / 续聊会自动回到该会话原始目录，不会用错上下文
 
-# 处理文件
-node package/cli.js -p "帮我重构 src/main.ts 中的 getUser 函数"
+### 数据存储位置
 
-# 指定模型
-node package/cli.js -p "写一个排序算法" --model sonnet
+| 内容                    | 路径                                              |
+| --------------------- | ----------------------------------------------- |
+| 会话列表（标题、fork 关系等）     | `~/.opc-webui/conversations.json`               |
+| DeepSeek API Key 配置   | `~/.opc-webui/config.json`                      |
+| 每个会话的完整历史（transcript） | `~/.claude/projects/<工作目录编码>/<sessionId>.jsonl` |
 
-# JSON 输出（适合程序处理）
-node package/cli.js -p "列出当前目录的文件" --output-format json
-```
-
-### 模式三：继续上次对话
-
-```bash
-# 继续当前目录的最近对话
-node package/cli.js -c
-
-# 恢复指定会话
-node package/cli.js -r <session-id>
-```
+以上数据都保存在用户主目录，删除会话时会**级联删除**其所有 Fork 分支对应的记录与历史文件。
 
 ---
 
-## ⚙️ 常用配置
+## ⚙️ 工作原理（简述）
 
-### 🔑 配置自己的 API（第三方代理 / 自定义端点）
+`webui/server.js` 为每条消息派生一次性的 CLI 会话：
 
-如果你使用第三方 API 代理服务或有自定义端点，可以这样配置：
-
-#### 方式一：通过 Settings 文件（推荐，持久化）
-
-1. 创建配置文件：
-
-```json
-// settings.json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://你的代理地址",
-    "ANTHROPIC_AUTH_TOKEN": "sk-你的API密钥"
-  }
-}
+```
+node package/cli.js -p "<prompt>" --output-format stream-json \
+     --include-partial-messages --verbose --permission-mode <mode> \
+     [--model <model>] [--thinking <mode>] [--settings <file>] \
+     [--resume <sessionId|jsonl路径>] [--fork-session]
 ```
 
-2. 运行时加载配置：
-
-```bash
-node package/cli.js --settings settings.json
-```
-
-#### 方式二：通过环境变量（临时）
-
-```powershell
-# PowerShell
-$env:ANTHROPIC_BASE_URL = "https://你的代理地址"
-$env:ANTHROPIC_AUTH_TOKEN = "sk-你的API密钥"
-node package/cli.js
-```
-
-```bash
-# CMD
-set ANTHROPIC_BASE_URL=https://你的代理地址
-set ANTHROPIC_AUTH_TOKEN=sk-你的API密钥
-node package/cli.js
-```
-
-#### 方式三：通过全局配置目录
-
-Claude Code 会自动读取 `~/.claude/settings.json`：
-
-```json
-// C:\Users\你的用户名\.claude\settings.json  (Windows)
-// ~/.claude/settings.json  (macOS/Linux)
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://你的代理地址",
-    "ANTHROPIC_AUTH_TOKEN": "sk-你的API密钥"
-  }
-}
-```
-
-配置后每次运行 `node package/cli.js` 都会自动使用这些设置。
-
-#### 支持的模型别名
-
-```bash
-# 常用模型
-node package/cli.js --model sonnet     # Claude Sonnet（默认）
-node package/cli.js --model opus       # Claude Opus（最强）
-node package/cli.js --model haiku      # Claude Haiku（最快）
-
-# 指定完整模型名
-node package/cli.js --model claude-sonnet-4-6
-node package/cli.js --model claude-opus-4-6
-```
-
-#### ⚠️ 注意事项
-
-- 第三方代理可能不支持所有模型，请以代理方提供的模型列表为准
-- `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_API_KEY` 任选其一即可
-- 如果同时设置了环境变量和 settings 文件，环境变量优先级更高
-- **不要在公开仓库分享包含 API Key 的配置文件**
-
----
-
-### 选择模型
-
-```bash
-# Sonnet（默认，速度快，性价比高）
-node package/cli.js --model sonnet
-
-# Opus（最强，但较慢较贵）
-node package/cli.js --model opus
-
-# Haiku（最快最便宜）
-node package/cli.js --model haiku
-```
-
-### 权限模式
-
-```bash
-# 默认模式（每次操作需要确认）
-node package/cli.js
-
-# 自动接受编辑（不用每次确认文件修改）
-node package/cli.js --permission-mode acceptEdits
-
-# 跳过所有权限检查（⚠️ 仅限沙箱环境）
-node package/cli.js --dangerously-skip-permissions
-```
-
-### 使用插件
-
-```bash
-# 从指定目录加载插件
-node package/cli.js --plugin-dir ./plugins/code-review
-
-# 加载多个插件
-node package/cli.js --plugin-dir ./plugins/code-review --plugin-dir ./plugins/commit-commands
-```
-
----
-
-## 🎯 实战示例
-
-### 示例 1：让 Claude 帮你写代码
-
-```bash
-# 进入你的项目目录
-cd your-project
-
-# 启动 Claude
-node /path/to/Open-ClaudeCode/package/cli.js
-
-# 然后输入：
-> 帮我创建一个用户登录 API，使用 Express.js
-> 给这个函数添加单元测试
-> 修复 src/auth.ts 中的类型错误
-```
-
-### 示例 2：代码审查
-
-```bash
-# 使用 code-review 插件
-node package/cli.js --plugin-dir ./plugins/code-review
-
-# 或者直接让 Claude 审查
-> 帮我审查最近的 git diff
-> 检查这个 PR 有没有潜在问题
-```
-
-### 示例 3：Git 工作流
-
-```bash
-# 使用 commit-commands 插件
-node package/cli.js --plugin-dir ./plugins/commit-commands
-
-# 或者直接用内置命令
-> /commit    # 智能生成 commit message
-```
-
----
-
-## 📋 内置命令速查
-
-在交互模式下输入 `/` 开头的命令：
-
-| 命令 | 功能 |
-|------|------|
-| `/help` | 显示帮助 |
-| `/clear` | 清空对话 |
-| `/compact` | 压缩对话历史 |
-| `/model` | 切换模型 |
-| `/theme` | 切换主题 |
-| `/vim` | 切换 Vim 模式 |
-| `/cost` | 查看费用统计 |
-| `/stats` | 查看使用统计 |
-| `/share` | 分享会话 |
-| `/exit` | 退出 |
+- CLI 事件通过 **SSE**（`/api/events`）实时推送到浏览器渲染
+- 续聊时自动 `--resume` 上次的 session 恢复上下文；Fork 时附带 `--fork-session` 派生全新会话
+- 工具权限请求（`can_use_tool`）转发到页面，用户点选后写回 CLI 的 stdin
+- 服务会**剥离 shell 环境里已有的 `ANTHROPIC_API_KEY / AUTH_TOKEN / MODEL`**，避免误用旧 Key，统一使用你在页面保存的 DeepSeek Key
+- Web UI 为纯 Node.js 实现，**无需 `npm install`**，除自带的 `package/cli.js` 外无其它依赖
 
 ---
 
 ## ❓ 常见问题
 
-### Q: 提示需要认证怎么办？
-A: 首次运行需要登录。运行后会自动打开浏览器，用你的 Claude 账号登录即可。或者设置 `ANTHROPIC_API_KEY` 环境变量。
-
-### Q: 运行后卡住了？
-A: 检查网络连接。如果在中国大陆，可能需要代理：
-```bash
-$env:HTTPS_PROXY="http://127.0.0.1:7890"
-node package/cli.js
-```
-
-### Q: 如何查看花了多少钱？
-A: 在交互模式下输入 `/cost` 或 `/stats` 查看。
-
-### Q: 如何配置第三方代理或自定义 API？
-A: 创建 `settings.json` 文件，内容如下：
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "https://你的代理地址",
-    "ANTHROPIC_AUTH_TOKEN": "sk-你的密钥"
-  }
-}
-```
-然后运行 `node package/cli.js --settings settings.json`。也可以放到 `~/.claude/settings.json` 实现全局配置。
-
-### Q: 可以在任何目录运行吗？
-A: 可以！但建议在你的项目目录下运行，这样 Claude 可以访问项目文件。
-
-### Q: 和 npm 安装的区别？
-A: 这个仓库提供的是从 npm 包恢复的完整源码，适合学习研究。功能上和 npm 安装的版本一致。
-
-### Q: 支持 OpenAI 格式的 API 吗？
-A: Claude Code 原生使用 Anthropic API 格式。如果你需要使用 OpenAI SDK 格式调用，可以使用 **[Universal-AI-Protocol-Bridge](https://github.com/LING71671/Universal-AI-Protocol-Bridge)** 进行协议转换：
-
-**功能特性：**
-- 🔄 **协议转换** - 将 OpenAI SDK 格式转换为 Anthropic/Claude API 格式
-- 🌐 **多协议支持** - OpenAI、Anthropic、Google Gemini、AWS Bedrock、Azure、Ollama 等
-- ⚡ **流式传输优化** - 完整支持 SSE/NDJSON 流式响应
-- 🔐 **安全加密** - AES-GCM 加密保护 API Key
-- ☁️ **Cloudflare Workers** - 边缘部署，全球低延迟
-
-**使用方法：**
-1. 访问 [在线测试地址](https://apibridge.071.cc.cd/) 或自行部署
-2. 选择目标协议（如 Anthropic）并填入 API Key
-3. 生成代理 URL，将你的 OpenAI SDK `baseURL` 指向该地址即可
-
-```javascript
-// 示例：使用 OpenAI SDK 调用 Claude
-import OpenAI from 'openai';
-
-const client = new OpenAI({
-  baseURL: 'https://your-bridge-url/proxy/{token}/v1',
-  apiKey: 'any-key'  // 实际 Key 已加密在 token 中
-});
-
-// 现在可以用 OpenAI 格式调用 Claude 了！
-const response = await client.chat.completions.create({
-  model: 'claude-3-5-sonnet-latest',
-  messages: [{ role: 'user', content: 'Hello!' }]
-});
-```
+| 问题                                     | 处理方式                                                          |
+| -------------------------------------- | ------------------------------------------------------------- |
+| 端口被占用                                  | 换个端口：`start-webui.cmd 8788`                                   |
+| 提示 `package\cli.js not found`          | `start-webui.cmd` 必须放在仓库根目录（与 `webui\`、`package\` 同级）         |
+| 发送报「尚未配置 DeepSeek API Key」             | 先在页面顶部保存自己的 API Key                                           |
+| Windows 下 CLI 启动即报 "requires git-bash" | 安装 Git for Windows 并确保 PATH 中有 `git`，服务会自动查找 bash.exe 并传给 CLI |
+| 提示会话「正在运行」无法操作                         | 点击「停止」结束当前任务后再切换 / 新建 / 删除                                    |
+| 切换会话后没反应                               | 当前有任务在运行时会提示先停止，停止后再切换                                        |
 
 ---
 
-## 📚 学习源码
+## ⚠️ 已知限制
 
-源码位于 `src/` 目录，包含 1,902 个源文件：
-
-```bash
-# 查看入口点
-cat src/main.tsx
-
-# 查看工具实现
-ls src/tools/
-
-# 查看命令实现
-ls src/commands/
-```
-
-### 使用插件
-
-插件位于 `plugins/` 目录，包含 13 个官方插件：
-
-```bash
-# 查看插件列表
-ls plugins/
-
-# 查看插件详情
-cat plugins/ralph-wiggum/.claude-plugin/plugin.json
-```
-
----
-
-## 📊 项目统计
-
-| 类别 | 数量 |
-|------|------|
-| TypeScript 源码 (.ts + .tsx) | 1,884 文件 |
-| JavaScript 源码 (.js) | 18 文件 |
-| 所有源码文件总计 | 1,902 文件 |
-| 工具实现 | 30+ 个 |
-| 命令实现 | 50+ 个 |
-| 服务模块 | 15+ 个 |
-| UI 组件 | 25+ 个 |
-| 官方插件 | 13 个 |
-| 原生模块 | 2 个 (audio-capture, ripgrep) |
-| 支持平台 | 6 个 (macOS/Linux/Windows × arm64/x64) |
-
----
-
-## 📜 许可证
-
-本项目源码版权归 **Anthropic PBC** 所有。
-
-本仓库仅供学习和研究使用，不代表 Anthropic 官方立场。
-
-详见 [LICENSE](LICENSE) 和 [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md)。
-
----
-
-## 🔗 相关链接
-
-- [Anthropic 官网](https://www.anthropic.com/)
-- [Claude Code 文档](https://code.claude.com/)
-- [本项目 GitHub](https://github.com/LING71671/Open-ClaudeCode)
-- [讨论区](https://github.com/LING71671/Open-ClaudeCode/issues/2)
-
----
-
-*最后更新: 2026-04-01*
+- 仅支持 DeepSeek Anthropic 兼容网关（Key、模型均由该网关提供）
+- 每个浏览器标签页同一时间运行一个任务；其余会话须先停止当前任务再操作
+- 服务绑定 `127.0.0.1`，仅供本机使用
