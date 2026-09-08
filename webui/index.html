@@ -288,6 +288,27 @@
     word-break: break-word; max-height: 300px;
   }
   #permActions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+
+  /* quote follow-up popup (select text in an AI reply to fork-ask) */
+  #quotePopup {
+    position: fixed; z-index: 60; width: 340px;
+    background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(61,57,41,.18);
+    padding: 10px 12px; display: none;
+  }
+  #quotePopup.open { display: block; }
+  #quotePopup .qp-label { font-size: 12px; font-weight: 600; color: var(--accent-2); margin-bottom: 6px; }
+  #quotePopup .qp-quote {
+    font-size: 12px; color: var(--muted); background: var(--panel);
+    border-left: 3px solid var(--accent); border-radius: 4px;
+    padding: 4px 8px; margin-bottom: 8px;
+    max-height: 72px; overflow: hidden;
+  }
+  #quotePopup input {
+    width: 100%; margin-bottom: 8px;
+  }
+  #quotePopup .qp-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #quotePopup .qp-actions button { padding: 4px 12px; font-size: 12px; }
   .cursor { display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 </style>
@@ -352,6 +373,16 @@
       <button id="permDeny" class="secondary">拒绝</button>
       <button id="permAllow">允许</button>
     </div>
+  </div>
+</div>
+
+<div id="quotePopup">
+  <div class="qp-label">对选中内容追问（将 fork 一个新会话）</div>
+  <div class="qp-quote" id="qpQuote"></div>
+  <input type="text" id="qpInput" placeholder="输入追问，回车发送（Esc 关闭）" />
+  <div class="qp-actions">
+    <button id="qpCancel" class="secondary">取消</button>
+    <button id="qpAsk">追问</button>
   </div>
 </div>
 
@@ -924,6 +955,7 @@ async function switchConversation(id) {
     return
   }
   if (id === conversationId) return
+  hideQuotePopup()
   const conv = conversationsCache.find(c => c.id === id)
   conversationId = id
   chatId = null
@@ -1001,6 +1033,7 @@ function newConversation() {
     setStatus('请先停止当前任务再新建会话', 'error')
     return
   }
+  hideQuotePopup()
   conversationId = null
   chatId = null
   stream = null
@@ -1010,6 +1043,96 @@ function newConversation() {
   renderSessionList()
   setStatus('空闲', 'idle')
   $('promptInput').focus()
+}
+
+// ---------------------------------------------------------------------------
+// quote follow-up: select text in an AI reply → ask in a forked conversation
+// ---------------------------------------------------------------------------
+let quoteSelection = null // captured selected text while the popup is open
+
+function hideQuotePopup() {
+  $('quotePopup').classList.remove('open')
+  quoteSelection = null
+}
+
+function maybeShowQuotePopup() {
+  if (running) return
+  const pop = $('quotePopup')
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return hideQuotePopup()
+  const range = sel.getRangeAt(0)
+  const node = range.commonAncestorContainer
+  const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
+  // only selections inside assistant bubbles are quotable
+  if (!el || !el.closest('.msg.assistant .bubble')) return hideQuotePopup()
+  const text = sel.toString().trim()
+  if (!text) return hideQuotePopup()
+
+  quoteSelection = { text } // capture before focusing the input clears the selection
+  $('qpQuote').textContent = text.length > 160 ? text.slice(0, 160) + '…' : text
+  $('qpInput').value = ''
+  pop.classList.add('open')
+
+  const rect = range.getBoundingClientRect()
+  const pw = 340
+  const ph = pop.offsetHeight || 160
+  let left = rect.left + rect.width / 2 - pw / 2
+  left = Math.max(8, Math.min(left, window.innerWidth - pw - 8))
+  let top = rect.bottom + 8
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, rect.top - ph - 8)
+  pop.style.left = left + 'px'
+  pop.style.top = top + 'px'
+  $('qpInput').focus()
+}
+
+async function submitQuoteQuestion() {
+  const question = $('qpInput').value.trim()
+  if (!question || !quoteSelection) return
+  if (!conversationId) {
+    hideQuotePopup()
+    setStatus('当前没有可追问的会话', 'error')
+    return
+  }
+  if (running) {
+    setStatus('请等待当前任务完成再追问', 'error')
+    return
+  }
+  const selected = quoteSelection.text
+  const sourceConv = conversationId
+  hideQuotePopup()
+
+  const quote = selected.split('\n').map(l => '> ' + l).join('\n')
+  const prompt = '关于你之前回复中我选中的这一段：\n\n' + quote + '\n\n我的追问：' + question
+
+  // switch to a fresh view; the forked conversation becomes the active one
+  chatId = crypto.randomUUID()
+  conversationId = null
+  stream = null
+  turnBubble = null
+  endAllToolRuns()
+  resetChatArea()
+  addMsg('user', prompt)
+  renderSessionList()
+  try {
+    const data = await post('/api/chat', {
+      chatId,
+      forkFrom: sourceConv,
+      title: question,
+      prompt,
+      cwd: $('cwdInput').value.trim() || undefined,
+      model: $('modelSel').value || undefined,
+      permissionMode: $('permSel').value,
+    })
+    if (data.chatId !== chatId) chatId = data.chatId
+    if (data.conversationId) conversationId = data.conversationId
+    loadConversations()
+  } catch (err) {
+    addSystemMsg('追问失败: ' + err.message, 'error')
+    setStatus('错误', 'error')
+    running = false
+    chatId = null
+    $('sendBtn').disabled = false
+  }
 }
 
 async function deleteSession(id) {
@@ -1056,6 +1179,7 @@ async function post(url, body) {
 async function sendMessage() {
   const prompt = $('promptInput').value.trim()
   if (!prompt || running) return
+  hideQuotePopup()
   const cwd = $('cwdInput').value.trim() || undefined
   // Generate chatId up front (before POST) so SSE events that arrive while
   // the POST is still in flight — run-start, system/init, assistant — are
@@ -1118,6 +1242,7 @@ $('sendBtn').onclick = sendMessage
 $('stopBtn').onclick = stopRun
 $('newChatBtn').onclick = newConversation
 $('promptInput').addEventListener('keydown', ev => {
+  if (ev.isComposing) return // IME composition confirm — don't send mid-typing
   if (ev.key === 'Enter' && !ev.shiftKey) {
     ev.preventDefault()
     sendMessage()
@@ -1148,6 +1273,54 @@ $('permBackdrop').onclick = ev => {
     // ignore click-outside for now (would block the CLI); keep modal
   }
 }
+
+// ---------------------------------------------------------------------------
+// quote follow-up: selecting text inside an AI reply opens the #quotePopup;
+// submitting forks a NEW conversation off the current one (see submitQuoteQuestion).
+// ---------------------------------------------------------------------------
+const isInsideQuotePopup = t =>
+  t && typeof t.closest === 'function' && !!t.closest('#quotePopup')
+
+// closing on outside mousedown: hide any stale popup before the next gesture
+// begins; if that gesture is a fresh drag-select, its mouseup reopens the popup.
+document.addEventListener('mousedown', ev => {
+  const pop = $('quotePopup')
+  if (!pop.classList.contains('open') || isInsideQuotePopup(ev.target)) return
+  hideQuotePopup()
+})
+
+// mouseup is the primary trigger (drag or double-click to select). Wait one
+// tick so the browser finalises the selection before we read its text + rect.
+document.addEventListener('mouseup', ev => {
+  if (running || isInsideQuotePopup(ev.target)) return
+  setTimeout(() => maybeShowQuotePopup(), 0)
+})
+
+// keyboard selection (Shift/Alt/⌘+arrows) with the caret in the message body.
+document.addEventListener('keyup', ev => {
+  if (running) return
+  const ae = document.activeElement
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return
+  if (!(ev.shiftKey || ev.ctrlKey || ev.metaKey)) return
+  setTimeout(() => maybeShowQuotePopup(), 0)
+})
+
+// popup actions: 追问 → fork-ask; 取消 / Esc → close; Enter → submit.
+$('qpAsk').onclick = submitQuoteQuestion
+$('qpCancel').onclick = hideQuotePopup
+$('qpInput').addEventListener('keydown', ev => {
+  if (ev.isComposing) return // IME composition confirm — don't submit mid-typing
+  if (ev.key === 'Enter') {
+    ev.preventDefault()
+    submitQuoteQuestion()
+  } else if (ev.key === 'Escape') {
+    ev.preventDefault()
+    hideQuotePopup()
+  }
+})
+
+// scrolling moves the selected text away from the popup → close it.
+messagesEl.addEventListener('scroll', hideQuotePopup)
 
 connectEvents()
 loadConversations()

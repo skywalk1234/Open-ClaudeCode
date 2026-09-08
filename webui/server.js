@@ -76,10 +76,11 @@ ANTHROPIC_MODEL) and ~/.claude/settings.json when no --settings is given.`)
 // one-shot CLI session (mirrors desktop/electron/cliRunner.cjs strategy)
 // ---------------------------------------------------------------------------
 class CliSession {
-  constructor({ cwd, settings, model, permissionMode, resumeSessionId, onEvent }) {
+  constructor({ cwd, settings, model, permissionMode, resumeSessionId, forkSession, onEvent }) {
     this.cwd = cwd
     this.onEvent = onEvent
     this.resumeSessionId = resumeSessionId || null
+    this.forkSession = Boolean(forkSession) // resume into a NEW session id
     this.sessionId = null // CLI session id, captured from stream events
     this.child = null
     this.buffer = ''
@@ -105,8 +106,12 @@ class CliSession {
   start(prompt) {
     const args = [...this.baseArgs]
     // Continue an existing conversation: the CLI loads the transcript and
-    // appends the new turn, keeping multi-turn context.
-    if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
+    // appends the new turn, keeping multi-turn context. With forkSession the
+    // turn lands in a NEW session id, leaving the source transcript intact.
+    if (this.resumeSessionId) {
+      args.push('--resume', this.resumeSessionId)
+      if (this.forkSession) args.push('--fork-session')
+    }
     args.push('-p', prompt)
     this.child = spawn(process.execPath, args, {
       cwd: this.cwd,
@@ -412,10 +417,11 @@ function createServer(opts) {
     if (req.method === 'GET' && p === '/api/conversations') {
       const list = [...conversations.values()]
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-        .map(({ id, title, cliSessionId, createdAt, updatedAt, running }) => ({
+        .map(({ id, title, cliSessionId, forkedFrom, createdAt, updatedAt, running }) => ({
           id,
           title,
           hasTranscript: Boolean(cliSessionId),
+          forkedFrom: forkedFrom || null,
           createdAt,
           updatedAt,
           running: Boolean(running),
@@ -479,12 +485,35 @@ function createServer(opts) {
 
       // Start a new one-shot CLI run for a chat message. When conversationId
       // refers to an existing conversation, the CLI resumes its transcript so
-      // the turn continues with full context.
+      // the turn continues with full context. forkFrom instead creates a NEW
+      // conversation that branches off the source transcript (--fork-session),
+      // leaving the source conversation untouched.
       if (p === '/api/chat') {
         const prompt = String(body.prompt || '').trim()
         if (!prompt) return sendJson(res, 400, { error: 'prompt is required' })
         let conv = null
-        if (body.conversationId) {
+        let forkSession = false
+        if (body.forkFrom) {
+          const src = conversations.get(String(body.forkFrom)) || null
+          if (!src) return sendJson(res, 404, { error: 'Fork source conversation not found' })
+          if (!src.cliSessionId) {
+            return sendJson(res, 409, { error: '源会话还没有可继承的上下文' })
+          }
+          if (src.running) {
+            return sendJson(res, 409, { error: '源会话有任务在运行，请先停止。' })
+          }
+          conv = {
+            id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+            title: String(body.title || prompt).slice(0, 40),
+            cliSessionId: src.cliSessionId,
+            forkedFrom: src.id,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            running: false,
+          }
+          conversations.set(conv.id, conv)
+          forkSession = true
+        } else if (body.conversationId) {
           conv = conversations.get(String(body.conversationId)) || null
           if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
         }
@@ -494,7 +523,7 @@ function createServer(opts) {
         if (!conv) {
           conv = {
             id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-            title: prompt.length > 40 ? prompt.slice(0, 40) + '…' : prompt,
+            title: String(body.title || prompt).slice(0, 40),
             cliSessionId: null,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -512,6 +541,7 @@ function createServer(opts) {
           model: body.model || opts.model || null,
           permissionMode: body.permissionMode || 'acceptEdits',
           resumeSessionId: convRef.cliSessionId,
+          forkSession,
           onEvent: ev => {
             // Track the CLI session id so the next message can --resume it.
             if (ev.session_id && ev.session_id !== convRef.cliSessionId) {
