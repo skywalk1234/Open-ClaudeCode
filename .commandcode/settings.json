@@ -13,7 +13,8 @@
       "Shell(}:*)",
       "Shell(node -v)",
       "powershell",
-      "Shell(node -e const fs=require('fs');const html=fs.readFileSync('webui/index.html','utf8');const m=html.match(/<script>([\\s\\S]*?)<\\/script>/);fs.writeFileSync(process.env.TEMP+'/webui-check.js',m[1]);)"
+      "Shell(node -e const fs=require('fs');const html=fs.readFileSync('webui/index.html','utf8');const m=html.match(/<script>([\\s\\S]*?)<\\/script>/);fs.writeFileSync(process.env.TEMP+'/webui-check.js',m[1]);)",
+      "Shell(node --check webui/server.js)"
     ],
     "deny": [],
     "defaultMode": "default"

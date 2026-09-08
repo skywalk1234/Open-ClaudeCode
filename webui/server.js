@@ -20,11 +20,16 @@
 const http = require('node:http')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 
 const ROOT = path.resolve(__dirname, '..')
 const CLI = path.join(ROOT, 'package', 'cli.js')
 const DEFAULT_PORT = 8787
+
+// Conversations survive server restarts via a small JSON store on disk.
+const STORE_DIR = path.join(os.homedir(), '.opc-webui')
+const STORE_FILE = path.join(STORE_DIR, 'conversations.json')
 
 // ---------------------------------------------------------------------------
 // tiny arg parser
@@ -71,9 +76,11 @@ ANTHROPIC_MODEL) and ~/.claude/settings.json when no --settings is given.`)
 // one-shot CLI session (mirrors desktop/electron/cliRunner.cjs strategy)
 // ---------------------------------------------------------------------------
 class CliSession {
-  constructor({ cwd, settings, model, permissionMode, onEvent }) {
+  constructor({ cwd, settings, model, permissionMode, resumeSessionId, onEvent }) {
     this.cwd = cwd
     this.onEvent = onEvent
+    this.resumeSessionId = resumeSessionId || null
+    this.sessionId = null // CLI session id, captured from stream events
     this.child = null
     this.buffer = ''
     this.finished = false
@@ -96,7 +103,11 @@ class CliSession {
   }
 
   start(prompt) {
-    const args = [...this.baseArgs, '-p', prompt]
+    const args = [...this.baseArgs]
+    // Continue an existing conversation: the CLI loads the transcript and
+    // appends the new turn, keeping multi-turn context.
+    if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
+    args.push('-p', prompt)
     this.child = spawn(process.execPath, args, {
       cwd: this.cwd,
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
@@ -151,6 +162,7 @@ class CliSession {
       this.onEvent({ type: 'stdout', text: line })
       return
     }
+    if (event.session_id) this.sessionId = event.session_id
     // Control requests (permission prompts) are handled separately; the CLI
     // is waiting for our control_response on stdin.
     if (event.type === 'control_request') {
@@ -204,13 +216,40 @@ class CliSession {
 }
 
 // ---------------------------------------------------------------------------
+// conversation store (persisted to disk)
+// ---------------------------------------------------------------------------
+function loadConversations() {
+  try {
+    const list = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'))
+    return new Map(Array.isArray(list) ? list.map(c => [c.id, c]) : [])
+  } catch {
+    return new Map()
+  }
+}
+
+function saveConversations(map) {
+  try {
+    fs.mkdirSync(STORE_DIR, { recursive: true })
+    fs.writeFileSync(STORE_FILE, JSON.stringify([...map.values()], null, 2))
+  } catch {
+    /* best effort — the UI still works with in-memory state */
+  }
+}
+
+// ---------------------------------------------------------------------------
 // HTTP + SSE server
 // ---------------------------------------------------------------------------
 function createServer(opts) {
-  const sessions = new Map() // chatId -> CliSession
+  const sessions = new Map() // chatId -> CliSession (one run)
+  const conversations = loadConversations() // conversationId -> conversation record
   const clients = new Set() // SSE response objects
   const eventLog = [] // ring buffer so late SSE clients catch up
   const EVENT_LOG_MAX = 500
+
+  function touchConversation(conv) {
+    conv.updatedAt = Date.now()
+    saveConversations(conversations)
+  }
 
   function broadcast(event) {
     eventLog.push(event)
@@ -272,6 +311,22 @@ function createServer(opts) {
       return
     }
 
+    // Conversation list for the sidebar
+    if (req.method === 'GET' && p === '/api/conversations') {
+      const list = [...conversations.values()]
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .map(({ id, title, cliSessionId, createdAt, updatedAt, running }) => ({
+          id,
+          title,
+          hasTranscript: Boolean(cliSessionId),
+          createdAt,
+          updatedAt,
+          running: Boolean(running),
+        }))
+      sendJson(res, 200, list)
+      return
+    }
+
     if (req.method === 'POST') {
       const raw = await readBody(req).catch(() => '{}')
       let body = {}
@@ -282,25 +337,58 @@ function createServer(opts) {
         return
       }
 
-      // Start a new one-shot CLI session for a chat message.
+      // Start a new one-shot CLI run for a chat message. When conversationId
+      // refers to an existing conversation, the CLI resumes its transcript so
+      // the turn continues with full context.
       if (p === '/api/chat') {
         const prompt = String(body.prompt || '').trim()
         if (!prompt) return sendJson(res, 400, { error: 'prompt is required' })
-        const chatId = String(body.chatId || `chat-${Date.now()}`)
-        if (sessions.has(chatId)) {
-          return sendJson(res, 409, { error: 'A session is already running for this chat. Stop it first.' })
+        let conv = null
+        if (body.conversationId) {
+          conv = conversations.get(String(body.conversationId)) || null
+          if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
         }
+        if (conv && conv.running) {
+          return sendJson(res, 409, { error: '该会话已有任务在运行，请先停止。' })
+        }
+        if (!conv) {
+          conv = {
+            id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+            title: prompt.length > 40 ? prompt.slice(0, 40) + '…' : prompt,
+            cliSessionId: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            running: false,
+          }
+          conversations.set(conv.id, conv)
+        }
+        const chatId = String(body.chatId || `chat-${Date.now()}`)
+        conv.running = true
+        touchConversation(conv)
+        const convRef = conv
         const session = new CliSession({
           cwd: body.cwd || opts.cwd || ROOT,
           settings: body.settings || opts.settings || null,
           model: body.model || opts.model || null,
           permissionMode: body.permissionMode || 'acceptEdits',
-          onEvent: ev => broadcast({ chatId, ...ev }),
+          resumeSessionId: convRef.cliSessionId,
+          onEvent: ev => {
+            // Track the CLI session id so the next message can --resume it.
+            if (ev.session_id && ev.session_id !== convRef.cliSessionId) {
+              convRef.cliSessionId = ev.session_id
+              touchConversation(convRef)
+            }
+            broadcast({ chatId, ...ev })
+          },
         })
         sessions.set(chatId, session)
         const run = session.start(prompt)
-        run.child.once('close', () => sessions.delete(chatId))
-        sendJson(res, 200, { chatId, pid: run.child.pid })
+        run.child.once('close', () => {
+          sessions.delete(chatId)
+          convRef.running = false
+          touchConversation(convRef)
+        })
+        sendJson(res, 200, { chatId, conversationId: convRef.id, pid: run.child.pid })
         return
       }
 
