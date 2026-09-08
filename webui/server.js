@@ -30,6 +30,15 @@ const DEFAULT_PORT = 8787
 // Conversations survive server restarts via a small JSON store on disk.
 const STORE_DIR = path.join(os.homedir(), '.opc-webui')
 const STORE_FILE = path.join(STORE_DIR, 'conversations.json')
+// The DeepSeek API key the user provides in the UI is kept here and read back
+// on every server start (never committed, it lives outside the repo).
+const CONFIG_FILE = path.join(STORE_DIR, 'config.json')
+
+// Only the DeepSeek Anthropic-compatible gateway is supported for now.
+const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/anthropic'
+// UI aliases → real DeepSeek model ids (anything else is passed through as-is).
+const MODEL_IDS = { flash: 'deepseek-v4-flash', pro: 'deepseek-v4-pro' }
+const resolveModel = m => MODEL_IDS[String(m || '').trim()] || (m || null)
 
 // ---------------------------------------------------------------------------
 // tiny arg parser
@@ -60,7 +69,12 @@ Options:
   --help              Show this help
 
 The CLI reads the usual env vars (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN,
-ANTHROPIC_MODEL) and ~/.claude/settings.json when no --settings is given.`)
+ANTHROPIC_MODEL) and ~/.claude/settings.json when no --settings is given.
+
+Every spawned CLI talks to the DeepSeek Anthropic-compatible gateway using the
+API key saved from the UI into ~/.opc-webui/config.json. Ambient
+ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL from the shell are
+deliberately stripped so no previously wired-in key is used.`)
       process.exit(0)
     }
   }
@@ -76,9 +90,10 @@ ANTHROPIC_MODEL) and ~/.claude/settings.json when no --settings is given.`)
 // one-shot CLI session (mirrors desktop/electron/cliRunner.cjs strategy)
 // ---------------------------------------------------------------------------
 class CliSession {
-  constructor({ cwd, settings, model, permissionMode, resumeSessionId, forkSession, onEvent }) {
+  constructor({ cwd, settings, model, thinking, env, permissionMode, resumeSessionId, forkSession, onEvent }) {
     this.cwd = cwd
     this.onEvent = onEvent
+    this.env = env
     this.resumeSessionId = resumeSessionId || null
     this.forkSession = Boolean(forkSession) // resume into a NEW session id
     this.sessionId = null // CLI session id, captured from stream events
@@ -100,6 +115,7 @@ class CliSession {
       args.push('--model', model)
       this.model = model
     }
+    if (thinking) args.push('--thinking', thinking)
     this.baseArgs = args
   }
 
@@ -115,7 +131,7 @@ class CliSession {
     args.push('-p', prompt)
     this.child = spawn(process.execPath, args, {
       cwd: this.cwd,
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env: this.env || { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     // The CLI probes stdin for ~3s when it is a non-TTY pipe to decide
@@ -242,6 +258,49 @@ function saveConversations(map) {
 }
 
 // ---------------------------------------------------------------------------
+// config store: the user-provided DeepSeek API key lives in ~/.opc-webui/
+// config.json and is read back automatically whenever the server starts.
+// ---------------------------------------------------------------------------
+function loadConfig() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'))
+    return { apiKey: String(cfg.apiKey || '').trim(), baseUrl: String(cfg.baseUrl || '').trim() }
+  } catch {
+    return { apiKey: '', baseUrl: '' }
+  }
+}
+
+function saveConfig(cfg) {
+  try {
+    fs.mkdirSync(STORE_DIR, { recursive: true })
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2))
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Env for every spawned CLI: DeepSeek gateway only, and the auth token is the
+// one the user configured in the UI — any ANTHROPIC_API_KEY / AUTH_TOKEN /
+// MODEL from the ambient shell are deliberately stripped so the previously
+// wired-in key stops being used.
+function buildChildEnv(config) {
+  const env = { ...process.env }
+  delete env.ANTHROPIC_API_KEY
+  delete env.ANTHROPIC_AUTH_TOKEN
+  delete env.ANTHROPIC_MODEL
+  env.ANTHROPIC_BASE_URL = config.baseUrl || DEEPSEEK_BASE_URL
+  env.FORCE_COLOR = '0'
+  env.NO_COLOR = '1'
+  const key = String(config.apiKey || '').trim()
+  if (key) {
+    env.ANTHROPIC_API_KEY = key
+    env.ANTHROPIC_AUTH_TOKEN = key
+  }
+  return env
+}
+
+// ---------------------------------------------------------------------------
 // transcript reading (history view): the CLI stores each conversation's events
 // as JSONL under ~/.claude/projects/<project>/<sessionId>.jsonl. We rebuild the
 // readable history from that file (user prompts live in `queue-operation
@@ -332,6 +391,7 @@ function parseTranscriptTurns(file) {
 function createServer(opts) {
   const sessions = new Map() // chatId -> CliSession (one run)
   const conversations = loadConversations() // conversationId -> conversation record
+  let config = loadConfig() // { apiKey, baseUrl } — the DeepSeek key from the UI
   const clients = new Set() // SSE response objects
   const eventLog = [] // ring buffer so late SSE clients catch up
   const EVENT_LOG_MAX = 500
@@ -410,6 +470,69 @@ function createServer(opts) {
       }
       clients.add(res)
       req.on('close', () => clients.delete(res))
+      return
+    }
+
+    // UI config probe: has the user saved a DeepSeek key? (never return the key)
+    if (req.method === 'GET' && p === '/api/config') {
+      const key = String(config.apiKey || '')
+      sendJson(res, 200, {
+        hasApiKey: Boolean(key),
+        apiKeyLast4: key.length > 4 ? key.slice(-4) : '',
+        baseUrl: config.baseUrl || DEEPSEEK_BASE_URL,
+        modelDefault: resolveModel('flash'),
+        root: ROOT, // repo root, for the cwd-picker quick jump
+        home: os.homedir(), // same, for the "主目录" quick jump
+      })
+      return
+    }
+
+    // Directory browser for the cwd picker (localhost tooling, dirs only).
+    if (req.method === 'GET' && p === '/api/fs/dir') {
+      const raw = String(url.searchParams.get('path') || '').trim()
+      const start = raw ? path.resolve(raw) : ROOT
+      let stat
+      try {
+        stat = fs.statSync(start)
+      } catch {
+        return sendJson(res, 400, { error: '路径不存在: ' + start })
+      }
+      if (!stat.isDirectory()) return sendJson(res, 400, { error: '不是目录: ' + start })
+      let names = []
+      try {
+        names = fs.readdirSync(start, { withFileTypes: true })
+      } catch {
+        return sendJson(res, 400, { error: '无法读取该目录（权限不足？）' })
+      }
+      const dirs = names
+        .filter(d => d.isDirectory())
+        .map(d => ({ name: d.name, full: path.join(start, d.name) }))
+        .sort((a, b) => {
+          const ah = a.name.startsWith('.') ? 1 : 0
+          const bh = b.name.startsWith('.') ? 1 : 0
+          if (ah !== bh) return ah - bh
+          return a.name.localeCompare(b.name, undefined, { numeric: true })
+        })
+      const parent = path.dirname(start)
+      const atRoot = parent === start // e.g. C:\ on Windows or / on POSIX
+      let drives = []
+      if (atRoot && process.platform === 'win32') {
+        for (let i = 65; i <= 90; i++) {
+          const d = String.fromCharCode(i) + ':\\'
+          try {
+            if (fs.statSync(d).isDirectory()) drives.push({ name: d, full: d, drive: true })
+          } catch {
+            /* no such drive */
+          }
+        }
+      }
+      sendJson(res, 200, {
+        path: start,
+        parent: atRoot ? null : parent,
+        atRoot,
+        drives, // sibling drives shown only at a drive root on Windows
+        entries: dirs,
+      })
       return
     }
 
@@ -494,6 +617,19 @@ function createServer(opts) {
         return
       }
 
+      // Save (or clear, with an empty apiKey) the user's DeepSeek API key.
+      if (p === '/api/config') {
+        const key = String(body.apiKey ?? '').trim()
+        config = { ...config, apiKey: key }
+        const saved = saveConfig(config)
+        sendJson(res, saved ? 200 : 500, {
+          ok: saved,
+          hasApiKey: Boolean(key),
+          apiKeyLast4: key.length > 4 ? key.slice(-4) : '',
+        })
+        return
+      }
+
       // Start a new one-shot CLI run for a chat message. When conversationId
       // refers to an existing conversation, the CLI resumes its transcript so
       // the turn continues with full context. forkFrom instead creates a NEW
@@ -502,6 +638,9 @@ function createServer(opts) {
       if (p === '/api/chat') {
         const prompt = String(body.prompt || '').trim()
         if (!prompt) return sendJson(res, 400, { error: 'prompt is required' })
+        if (!String(config.apiKey || '').trim()) {
+          return sendJson(res, 409, { error: '尚未配置 DeepSeek API Key，请在页面顶部填写并保存。' })
+        }
         let conv = null
         let forkSession = false
         if (body.forkFrom) {
@@ -549,10 +688,15 @@ function createServer(opts) {
         conv.running = true
         touchConversation(conv)
         const convRef = conv
+        const thinking = ['disabled', 'adaptive', 'enabled'].includes(String(body.thinking || '').trim())
+          ? String(body.thinking).trim()
+          : null
         const session = new CliSession({
           cwd: body.cwd || opts.cwd || ROOT,
           settings: body.settings || opts.settings || null,
-          model: body.model || opts.model || null,
+          model: resolveModel(body.model) || resolveModel(opts.model) || resolveModel('flash'),
+          thinking,
+          env: buildChildEnv(config),
           permissionMode: body.permissionMode || 'acceptEdits',
           resumeSessionId: convRef.cliSessionId,
           forkSession,

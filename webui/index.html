@@ -34,15 +34,25 @@
     overflow: hidden;
   }
 
-  /* left sidebar: session list */
+  /* left sidebar: session list (width set by JS drag resizer; separator drawn by #sbResizer) */
   #sidebar {
     width: 232px;
     flex-shrink: 0;
     background: var(--panel);
-    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
   }
+  #sbResizer {
+    flex: none; width: 6px; cursor: col-resize; position: relative; z-index: 6;
+  }
+  #sbResizer::before {
+    content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px;
+    background: var(--border);
+  }
+  #sbResizer:hover::before, body.sb-resizing #sbResizer::before {
+    left: 1px; width: 3px; background: var(--accent);
+  }
+  body.sb-resizing { cursor: col-resize; user-select: none; }
   .sb-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 12px 8px; font-weight: 700; font-size: 13px;
@@ -119,6 +129,16 @@
     font-size: 13px;
   }
   label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+  /* header cwd picker control */
+  .dir-wrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .dir-wrap .dir-lbl { color: var(--muted); font-size: 12px; }
+  .dir-path {
+    display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border-2); border-radius: 8px; padding: 5px 8px;
+    font-size: 12.5px; font-family: Consolas, "Cascadia Code", monospace;
+    vertical-align: middle;
+  }
   #status {
     margin-left: auto;
     font-size: 12px;
@@ -130,6 +150,7 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
   .dot.running { background: var(--accent); animation: pulse 1.2s infinite; }
   .dot.idle { background: var(--green); }
+  .dot.ok { background: var(--green); }
   .dot.error { background: var(--red); }
   @keyframes pulse { 50% { opacity: .3; } }
 
@@ -264,6 +285,25 @@
     border-top: 1px solid var(--border);
     max-width: 960px; width: 100%; margin: 0 auto;
   }
+  /* API key state chip in the header */
+  .key-state { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .key-state::before {
+    content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--red); margin-right: 5px; vertical-align: middle;
+  }
+  .key-state.ok { color: var(--green); }
+  .key-state.ok::before { background: var(--green); }
+
+  /* per-send model / thinking selectors above the input box */
+  .composer-meta {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .composer-meta label { white-space: nowrap; }
+  .composer-meta select { padding: 4px 6px; font-size: 12px; }
+  .cm-fill { flex: 1; }
+  .cm-tip { color: var(--muted); font-size: 11px; }
+
   .composer {
     display: flex; gap: 8px; align-items: flex-end;
     border: 1px solid var(--border-2); border-radius: var(--radius);
@@ -291,6 +331,51 @@
   }
   .empty h2 { color: var(--text); font-weight: 600; }
   .empty code { background: var(--panel); padding: 2px 8px; border-radius: 6px; }
+
+  /* directory picker modal (cwd chooser) */
+  #dirBackdrop {
+    position: fixed; inset: 0; background: rgba(61,57,41,.38);
+    display: none; align-items: center; justify-content: center; z-index: 90;
+  }
+  #dirBackdrop.open { display: flex; }
+  #dirModal {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+    width: min(640px, 94vw); max-height: 84vh; display: flex; flex-direction: column;
+    overflow: hidden; box-shadow: 0 8px 30px rgba(61,57,41,.2);
+  }
+  #dirModal h3 { margin: 0; padding: 14px 16px 4px; font-size: 15px; }
+  #dirModal .dm-bar, #dirModal .dm-nav, #dirModal .dm-goto {
+    display: flex; align-items: center; gap: 8px; padding: 8px 16px 0;
+  }
+  #dirModal .dm-bar { padding-top: 12px; }
+  #dirModal .dm-bar button, #dirModal .dm-nav button, #dirModal .dm-goto button {
+    padding: 5px 12px; font-size: 12px;
+  }
+  #dirModal .dm-path {
+    flex: 1; min-width: 0; font-family: Consolas, "Cascadia Code", monospace;
+    font-size: 12.5px; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border-2); border-radius: 8px; padding: 5px 8px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #dirModal .dm-goto input { flex: 1; }
+  .dm-list {
+    flex: 1; overflow-y: auto; margin: 10px 0 0; padding: 0 8px 6px;
+    list-style: none; min-height: 140px;
+  }
+  .dm-item {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 13px;
+    border: none; background: transparent; color: var(--text); text-align: left;
+    font-weight: 400;
+  }
+  .dm-item:hover { background: var(--panel); }
+  .dm-item .ico { width: 18px; text-align: center; flex: none; color: var(--accent-2); }
+  .dm-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dm-err { color: var(--red); font-size: 12.5px; padding: 10px 14px; }
+  .dm-actions {
+    display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px 14px;
+    border-top: 1px solid var(--border);
+  }
 
   /* permission modal */
   #permBackdrop {
@@ -389,16 +474,12 @@
   <div id="branchGraph"><div class="gg-empty">暂无分支</div></div>
 </aside>
 
+<div id="sbResizer" title="拖动调整侧栏宽度"></div>
+
 <div id="mainCol">
 
 <header>
   <div class="brand">OPC <span>Web UI</span></div>
-  <label>模型
-    <select id="modelSel">
-      <option value="">默认 (CLI 配置)</option>
-      <option>sonnet</option><option>opus</option><option>haiku</option>
-    </select>
-  </label>
   <label>权限
     <select id="permSel">
       <option value="acceptEdits">acceptEdits</option>
@@ -407,26 +488,77 @@
       <option value="bypassPermissions">bypassPermissions</option>
     </select>
   </label>
-  <label>目录
-    <input type="text" id="cwdInput" style="width:220px" placeholder="工作目录（默认仓库根）" />
+  <div class="dir-wrap" title="CLI 工作目录（留空 = 仓库根目录）">
+    <span class="dir-lbl">目录</span>
+    <span id="cwdDisplay" class="dir-path" title="">仓库根目录</span>
+    <button id="cwdPickBtn" class="secondary" type="button" title="弹出窗口选择工作目录">选择…</button>
+  </div>
+  <label>DeepSeek API Key
+    <input type="password" id="apiKeyInput" style="width:220px" autocomplete="off" spellcheck="false"
+      placeholder="sk-…（仅保存在本机 ~/.opc-webui/config.json）" />
   </label>
+  <button id="apiKeySave" class="secondary" title="保存到本地并自动用于请求；输入框留空再点保存 = 清除">保存 Key</button>
+  <span id="keyState" class="key-state">读取中…</span>
   <div id="status"><span class="dot idle" id="statusDot"></span><span id="statusText">空闲</span></div>
 </header>
 
 <main id="messages">
   <div class="empty" id="emptyState">
     <h2>本地 OPC Web 界面</h2>
-    <p>在下方输入问题，回车发送。<br />模型/权限/目录修改后会作用于下一次发送。<br />CLI 事件经 SSE 实时流式显示。</p>
+    <p>先在上方填入你自己的 DeepSeek API Key 并保存（仅存本机，不出现在请求里以外的任何地方）。<br />然后在下方输入问题，回车发送。<br />模型/思考/权限/目录修改后会作用于下一次发送。<br />CLI 事件经 SSE 实时流式显示。</p>
   </div>
 </main>
 
 <footer>
+  <div class="composer-meta">
+    <label>模型
+      <select id="modelSel" title="DeepSeek 模型">
+        <option value="deepseek-v4-flash">flash（快）</option>
+        <option value="deepseek-v4-pro">pro（更强）</option>
+      </select>
+    </label>
+    <label>思考
+      <select id="thinkSel" title="思考模式（映射 CLI 的 --thinking）">
+        <option value="adaptive">自动（默认）</option>
+        <option value="disabled">关闭</option>
+        <option value="enabled">深度</option>
+      </select>
+    </label>
+    <span class="cm-fill"></span>
+    <span class="cm-tip">模型/思考作用于下一次发送</span>
+  </div>
   <div class="composer">
     <textarea id="promptInput" rows="1" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
     <button id="stopBtn" class="danger" disabled>停止</button>
     <button id="sendBtn">发送</button>
   </div>
 </footer>
+
+<!-- directory picker modal -->
+<div id="dirBackdrop">
+  <div id="dirModal" role="dialog" aria-modal="true" aria-label="选择工作目录">
+    <h3>选择工作目录</h3>
+    <div class="dm-bar">
+      <button id="dmUp" class="secondary" type="button">↑ 上一级</button>
+      <span id="dmPath" class="dm-path" title=""></span>
+    </div>
+    <div class="dm-nav">
+      <button class="secondary" type="button" data-jump="root">仓库根</button>
+      <button class="secondary" type="button" data-jump="home">主目录</button>
+      <button class="secondary" type="button" data-jump="cur">当前选择</button>
+    </div>
+    <div class="dm-goto">
+      <input id="dmInput" type="text" autocomplete="off" spellcheck="false"
+        placeholder="或输入绝对路径后回车跳转" />
+      <button id="dmGo" class="secondary" type="button">跳转</button>
+    </div>
+    <ul id="dmList" class="dm-list"></ul>
+    <div class="dm-actions">
+      <button id="dmUse" type="button">使用此目录</button>
+      <button id="dmCancel" class="secondary" type="button">取消</button>
+    </div>
+  </div>
+</div>
 
 </div><!-- /mainCol -->
 
@@ -471,6 +603,8 @@ let chatId = null // current run id (SSE routing); one per message
 let conversationId = null // current conversation; persists across messages
 let conversationsCache = []
 let running = false
+let currentCwd = '' // '' = server default (repo root); set via the dir picker
+const picker = { path: '', parent: null, root: '', home: '' } // dir-picker state
 let currentPerm = null // { requestId, resolve }
 let stream = null // active streaming content node (segment within the turn bubble)
 let turnBubble = null // one bubble per user turn: all thinking/text/tool cards live here
@@ -1512,8 +1646,9 @@ async function submitQuoteQuestion() {
       prompt,
       entry: question,
       quote: selected, // the exact selected AI text this fork asks about
-      cwd: $('cwdInput').value.trim() || undefined,
+      cwd: currentCwd || undefined,
       model: $('modelSel').value || undefined,
+      thinking: $('thinkSel').value,
       permissionMode: $('permSel').value,
     })
     if (data.chatId !== chatId) chatId = data.chatId
@@ -1573,7 +1708,7 @@ async function sendMessage() {
   const prompt = $('promptInput').value.trim()
   if (!prompt || running) return
   hideQuotePopup()
-  const cwd = $('cwdInput').value.trim() || undefined
+  const cwd = currentCwd || undefined
   // Generate chatId up front (before POST) so SSE events that arrive while
   // the POST is still in flight — run-start, system/init, assistant — are
   // not mistaken for a different run and dropped.
@@ -1587,6 +1722,7 @@ async function sendMessage() {
     entry: prompt,
     cwd,
     model: $('modelSel').value || undefined,
+    thinking: $('thinkSel').value,
     permissionMode: $('permSel').value,
   }
   const send = () => {
@@ -1630,10 +1766,202 @@ async function stopRun() {
 }
 
 // ---------------------------------------------------------------------------
+// API key config: the header holds a password input that persists the user's
+// own DeepSeek key to ~/.opc-webui/config.json via /api/config. GET only ever
+// returns the last-4 of the stored key, so we show a hint, never the key.
+// ---------------------------------------------------------------------------
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config')
+    if (!res.ok) throw new Error(res.statusText)
+    const cfg = await res.json()
+    // picker quick-jump anchors come from the same config probe
+    picker.root = cfg.root || ''
+    picker.home = cfg.home || ''
+    renderCwdDisplay()
+    const el = $('apiKeyInput')
+    const st = $('keyState')
+    if (cfg.hasApiKey) {
+      el.placeholder = '已保存 Key sk-…' + (cfg.apiKeyLast4 || '••••') + '（留空再点保存 = 清除）'
+      st.textContent = '已配置'
+      st.classList.add('ok')
+    } else {
+      el.placeholder = 'sk-…（仅保存到本机 ~/.opc-webui/config.json）'
+      st.textContent = '未配置'
+      st.classList.remove('ok')
+    }
+  } catch (err) {
+    const st = $('keyState')
+    st.textContent = '读取失败'
+    st.classList.remove('ok')
+  }
+}
+
+async function saveApiKey() {
+  const btn = $('apiKeySave')
+  const el = $('apiKeyInput')
+  const key = el.value.trim()
+  btn.disabled = true
+  try {
+    await post('/api/config', { apiKey: key || undefined })
+    el.value = ''
+    setStatus(key ? 'API Key 已保存' : 'API Key 已清除', key ? 'ok' : 'idle')
+    loadConfig() // refresh the header chip + placeholder
+  } catch (err) {
+    setStatus('保存 Key 失败: ' + err.message, 'error')
+  } finally {
+    btn.disabled = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cwd display + directory picker (browse the local fs, pick a working dir)
+// ---------------------------------------------------------------------------
+function renderCwdDisplay() {
+  const el = $('cwdDisplay')
+  const root = picker.root || ''
+  // Choosing the repo root itself is identical to leaving it unset.
+  if (currentCwd && currentCwd !== root) {
+    el.textContent = currentCwd
+    el.title = 'CLI 工作目录：' + currentCwd
+  } else {
+    el.textContent = '仓库根目录'
+    el.title = 'CLI 工作目录：' + (root || '仓库根目录') + '（仓库根）'
+  }
+}
+
+function closeDirPicker() {
+  $('dirBackdrop').classList.remove('open')
+  $('dmInput').value = ''
+  picker.path = ''
+  picker.parent = null
+}
+
+async function gotoDir(target) {
+  try {
+    const res = await fetch('/api/fs/dir?path=' + encodeURIComponent(target || ''))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || res.statusText)
+    picker.path = data.path
+    picker.parent = data.parent
+    $('dmPath').textContent = data.path
+    $('dmPath').title = data.path
+    $('dmInput').value = data.path
+    renderDirList(data)
+  } catch (err) {
+    $('dmList').innerHTML = '<li class="dm-err">打开失败：' + esc(err.message) + '</li>'
+  }
+}
+
+function renderDirList(data) {
+  const ul = $('dmList')
+  ul.innerHTML = ''
+  const mk = (ico, label, onPick) => {
+    const li = document.createElement('li')
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'dm-item'
+    b.title = label
+    b.innerHTML = '<span class="ico">' + ico + '</span><span class="nm">' + esc(label) + '</span>'
+    b.addEventListener('click', onPick)
+    li.appendChild(b)
+    ul.appendChild(li)
+  }
+  if (data.parent) mk('↑', '上一级：' + data.parent, () => gotoDir(data.parent))
+  for (const d of data.drives || []) mk('◉', d.full + '（磁盘）', () => gotoDir(d.full))
+  const entries = data.entries || []
+  for (const e of entries) mk('▸', e.name, () => gotoDir(e.full))
+  if (!data.parent && !(data.drives || []).length && !entries.length) {
+    ul.innerHTML = '<li class="dm-err">此目录没有可进入的子目录</li>'
+  }
+}
+
+async function openDirPicker() {
+  $('dmList').innerHTML = '<li class="dm-err">读取中…</li>'
+  $('dirBackdrop').classList.add('open')
+  $('dmInput').value = ''
+  await gotoDir(currentCwd || picker.root || '')
+  $('dmInput').select()
+}
+
+// ---------------------------------------------------------------------------
+// sidebar: drag the #sbResizer handle to resize, remember the width
+// ---------------------------------------------------------------------------
+function initSidebarResizer() {
+  const sb = $('sidebar')
+  const rz = $('sbResizer')
+  // never let the sidebar crowd out the whole window (min 300px stays for main)
+  const clamp = w => {
+    const maxW = Math.max(300, window.innerWidth - 300)
+    return Math.max(170, Math.min(Math.min(720, maxW), Math.round(w)))
+  }
+  const saved = Number(localStorage.getItem('opc.sbw') || 0)
+  if (saved >= 170) sb.style.width = clamp(saved) + 'px'
+  let dragging = false
+  rz.addEventListener('pointerdown', ev => {
+    dragging = true
+    rz.setPointerCapture(ev.pointerId)
+    document.body.classList.add('sb-resizing')
+    ev.preventDefault()
+  })
+  rz.addEventListener('pointermove', ev => {
+    if (!dragging) return
+    const w = ev.clientX - sb.getBoundingClientRect().left
+    sb.style.width = clamp(w) + 'px'
+  })
+  const end = () => {
+    if (!dragging) return
+    dragging = false
+    document.body.classList.remove('sb-resizing')
+    localStorage.setItem('opc.sbw', String(clamp(sb.getBoundingClientRect().width)))
+  }
+  rz.addEventListener('pointerup', end)
+  rz.addEventListener('pointercancel', end)
+}
+
+// ---------------------------------------------------------------------------
 // events & bootstrap
 // ---------------------------------------------------------------------------
 $('sendBtn').onclick = sendMessage
 $('stopBtn').onclick = stopRun
+$('apiKeySave').onclick = saveApiKey
+initSidebarResizer()
+$('cwdPickBtn').onclick = openDirPicker
+$('dmUse').onclick = () => {
+  if (picker.path) {
+    // picking the repo root itself is equivalent to the default, keep it unset
+    currentCwd = picker.path === picker.root ? '' : picker.path
+    renderCwdDisplay()
+  }
+  closeDirPicker()
+}
+$('dmCancel').onclick = closeDirPicker
+$('dmUp').onclick = () => { if (picker.parent) gotoDir(picker.parent) }
+$('dmGo').onclick = () => { const v = $('dmInput').value.trim(); if (v) gotoDir(v) }
+$('dmInput').addEventListener('keydown', ev => {
+  if (ev.isComposing) return
+  if (ev.key === 'Enter') {
+    ev.preventDefault()
+    const v = ev.target.value.trim()
+    if (v) gotoDir(v)
+  }
+})
+document.querySelectorAll('#dirModal [data-jump]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const k = btn.dataset.jump
+    if (k === 'root') gotoDir(picker.root || '')
+    else if (k === 'home') gotoDir(picker.home || '')
+    else gotoDir(currentCwd || picker.root || '')
+  })
+})
+// clicking the dimmed backdrop (outside the dialog) closes it
+$('dirBackdrop').addEventListener('click', ev => {
+  if (ev.target === $('dirBackdrop')) closeDirPicker()
+})
+// Esc closes the picker when open
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Escape' && $('dirBackdrop').classList.contains('open')) closeDirPicker()
+})
 $('newChatBtn').onclick = newConversation
 $('promptInput').addEventListener('keydown', ev => {
   if (ev.isComposing) return // IME composition confirm — don't send mid-typing
@@ -1720,6 +2048,7 @@ messagesEl.addEventListener('scroll', hideQuotePopup)
 
 connectEvents()
 loadConversations()
+loadConfig()
 $('promptInput').focus()
 </script>
 </body>
