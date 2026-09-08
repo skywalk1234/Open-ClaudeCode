@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(node -e const fs=require('fs');const html=fs.readFileSync('webui/index.html','utf8');const m=html.match(/<script>([\\s\\S]*?)<\\/script>/);if(!m){console.error('no script');process.exit(1)};fs.writeFileSync(process.env.TEMP+'/webui-check.js',m[1]);)",
+      "Shell(node --check C:\\Users\\15070\\AppData\\Local\\Temp/webui-check.js)",
+      "Shell(agent-browser:*)",
+      "Shell(node -e try{require.resolve)",
+      "Shell(jsdom:*)",
+      "Shell(console.log:*)",
+      "Shell(jsdom OK:*)",
+      "Shell(}catch{console.log:*)",
+      "Shell(no jsdom:*)",
+      "Shell(}:*)",
+      "Shell(node -v)",
+      "powershell",
+      "Shell(node -e const fs=require('fs');const html=fs.readFileSync('webui/index.html','utf8');const m=html.match(/<script>([\\s\\S]*?)<\\/script>/);fs.writeFileSync(process.env.TEMP+'/webui-check.js',m[1]);)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

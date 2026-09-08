@@ -86,6 +86,8 @@
   }
   .msg.user .avatar { background: var(--accent); }
   .msg.assistant .avatar { background: var(--text); }
+  /* user messages align right (avatar at right edge, bubble to its left); assistant stays left */
+  .msg.user { flex-direction: row-reverse; }
   .msg .bubble {
     background: var(--panel-2);
     border: 1px solid var(--border);
@@ -118,21 +120,52 @@
   .bubble blockquote { border-left: 3px solid var(--accent); margin: 8px 0; padding: 2px 12px; color: var(--muted); }
   .bubble a { color: var(--accent-2); }
 
-  /* thinking block (streamed reasoning) */
+  /* thinking block (streamed reasoning, collapsed by default) */
   .think {
     margin: 0 0 8px;
     border: 1px dashed var(--border-2);
     border-radius: 8px;
     background: var(--panel);
   }
-  .think summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 10px; user-select: none; }
+  .think summary {
+    cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 10px;
+    user-select: none; display: flex; align-items: center; gap: 6px;
+    list-style: none;
+  }
+  .think summary::-webkit-details-marker { display: none; }
+  .think summary::before {
+    content: '▸'; font-size: 10px; color: var(--border-2); transition: transform .15s;
+  }
+  .think[open] summary::before { transform: rotate(90deg); }
   .think .think-body {
     padding: 0 12px 8px; color: var(--muted); font-size: 12.5px;
     white-space: pre-wrap; word-break: break-word;
   }
+  /* "thinking" label motion while streaming */
+  .think.streaming .tlabel {
+    background: linear-gradient(90deg, var(--muted) 25%, var(--accent) 50%, var(--muted) 75%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: thinkShimmer 1.6s linear infinite;
+  }
+  @keyframes thinkShimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+  .think .tdots { display: none; align-items: center; gap: 3px; }
+  .think.streaming .tdots { display: inline-flex; }
+  .think .tdots i {
+    width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+    opacity: .25; animation: thinkDot 1.2s infinite;
+  }
+  .think .tdots i:nth-child(2) { animation-delay: .2s; }
+  .think .tdots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes thinkDot { 40% { opacity: 1; } }
 
   .tool {
-    margin-top: 8px;
+    margin: 8px 0;
     border: 1px solid var(--border);
     border-left: 3px solid var(--accent);
     border-radius: 8px;
@@ -140,12 +173,26 @@
     padding: 8px 12px;
     font-size: 12.5px;
   }
-  .tool .tname { color: var(--accent-2); font-weight: 600; font-family: Consolas, monospace; }
-  .tool pre {
-    margin: 6px 0 0; padding: 8px; background: var(--panel-2);
-    border: 1px solid var(--border); border-radius: 6px; overflow-x: auto; font-size: 12px;
-    white-space: pre-wrap; word-break: break-word;
+  .tool .tool-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .tool .tname { color: var(--accent-2); font-weight: 600; font-family: Consolas, monospace; flex-shrink: 0; }
+  .tool .tcmd {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 12px;
+    color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
   }
+  /* running indicator: spinner while the tool executes, check when done */
+  .tool .spinner, .tool .done { flex-shrink: 0; width: 14px; height: 14px; }
+  .tool .spinner {
+    border: 2px solid var(--border-2); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tool .done { display: none; align-items: center; justify-content: center; color: var(--green); font-size: 13px; }
+  .tool .done::after { content: '✓'; }
+  .tool:not(.running) .spinner { display: none; }
+  .tool:not(.running) .done { display: flex; }
+  .tool.running { animation: toolPulse 1.6s ease-in-out infinite; }
+  @keyframes toolPulse { 50% { border-color: var(--accent); } }
 
   .error-msg { color: var(--red); }
 
@@ -275,7 +322,9 @@ const messagesEl = $('messages')
 let chatId = null
 let running = false
 let currentPerm = null // { requestId, resolve }
-let stream = null // active streaming content node
+let stream = null // active streaming content node (segment within the turn bubble)
+let turnBubble = null // one bubble per user turn: all thinking/text/tool cards live here
+const runningTools = new Set() // tool cards currently executing
 let renderQueued = false
 let renderedText = false
 const history = []
@@ -377,16 +426,53 @@ function addMsg(role, text, opts = {}) {
   return wrap.querySelector('.content')
 }
 
-function addToolMsg(toolName, input) {
-  const wrap = document.createElement('div')
-  wrap.className = 'msg assistant'
-  let inputText = ''
-  try { inputText = JSON.stringify(input, null, 2) } catch { inputText = String(input) }
-  wrap.innerHTML = '<div class="avatar">AI</div><div class="bubble"><div class="meta">工具调用</div>' +
-    '<div class="tool"><span class="tname">' + esc(toolName) + '</span><pre>' + esc(inputText) + '</pre></div></div>'
-  messagesEl.appendChild(wrap)
+function addToolCard(node, toolName, input, id) {
+  const bubble = node.closest('.bubble')
+  const div = document.createElement('div')
+  div.className = 'tool running'
+  div.innerHTML =
+    '<div class="tool-head"><span class="spinner"></span><span class="done"></span>' +
+    '<span class="tname">' + esc(toolName) + '</span><span class="tcmd"></span></div>'
+  bubble.appendChild(div)
+  const card = { name: toolName, id: id || null, el: div, cmd: div.querySelector('.tcmd'), acc: '' }
+  runningTools.add(card)
+  setToolCmd(card, input)
   messagesEl.scrollTop = messagesEl.scrollHeight
-  return wrap.querySelector('pre')
+  return card
+}
+
+// one-line summary of what the tool does (description field is never shown)
+function toolCmdText(input) {
+  if (input && typeof input === 'object') {
+    if (typeof input.command === 'string' && input.command) return input.command
+    for (const k of ['file_path', 'path', 'pattern', 'query', 'url', 'prompt', 'name']) {
+      if (typeof input[k] === 'string' && input[k]) return input[k]
+    }
+    for (const [k, v] of Object.entries(input)) {
+      if (k !== 'description' && typeof v === 'string' && v) return v
+    }
+  }
+  return ''
+}
+
+function setToolCmd(card, input) {
+  card.cmd.textContent = toolCmdText(input)
+}
+
+// extract the command from a partially-streamed tool input JSON
+function partialCmdFromJson(acc) {
+  const m = (acc || '').match(/"command"\s*:\s*"((?:[^"\\]|\\.)*)/)
+  if (!m) return null
+  return m[1].replace(/\\n/g, ' ').replace(/\\t/g, ' ').replace(/\\(.)/g, '$1')
+}
+
+function endToolRun(card) {
+  card.el.classList.remove('running')
+  runningTools.delete(card)
+}
+
+function endAllToolRuns() {
+  for (const card of [...runningTools]) endToolRun(card)
 }
 
 function addSystemMsg(text, kind) {
@@ -437,13 +523,27 @@ function openStreamBubble() {
   node.dataset.text = ''
   node._tools = {}
   node._toolQueue = []
+  turnBubble = node.closest('.bubble')
   return node
+}
+
+function newSegment(bubble) {
+  const content = document.createElement('div')
+  content.className = 'content'
+  content.dataset.streaming = '1'
+  content.dataset.text = ''
+  content._tools = {}
+  content._toolQueue = []
+  bubble.appendChild(content)
+  return content
 }
 
 function getStreamNode() {
   if (stream && stream.isConnected) return stream
-  const existing = messagesEl.querySelector('.msg.assistant .content[data-streaming="1"]')
-  if (existing) return (stream = existing)
+  if (turnBubble && turnBubble.isConnected) {
+    // continue inside the same turn bubble: open a new segment
+    return (stream = newSegment(turnBubble))
+  }
   return (stream = openStreamBubble())
 }
 
@@ -465,13 +565,24 @@ function ensureThink(node) {
   if (node._thinkBody) return
   const bubble = node.closest('.bubble')
   const details = document.createElement('details')
-  details.className = 'think'
-  details.open = true
-  details.innerHTML = '<summary>思考过程</summary><div class="think-body"></div>'
+  details.className = 'think streaming'
+  details.open = false // thinking content stays collapsed while streaming
+  details.innerHTML =
+    '<summary><span class="tlabel">正在思考</span><span class="tdots"><i></i><i></i><i></i></span></summary>' +
+    '<div class="think-body"></div>'
   bubble.insertBefore(details, node)
   node._think = details
   node._thinkBody = details.querySelector('.think-body')
   node._thinkText = ''
+}
+
+function endThink(node) {
+  const think = node && node._think
+  if (!think) return
+  think.classList.remove('streaming')
+  think.open = false
+  const label = think.querySelector('.tlabel')
+  if (label) label.textContent = '已深度思考'
 }
 
 function appendThink(node, chunk) {
@@ -490,22 +601,30 @@ function takeToolCard(node, name) {
 
 function finishStream() {
   if (!stream) return
-  if (stream._think) stream._think.open = false
+  endThink(stream)
   for (const key of Object.keys(stream._tools || {})) {
     const card = stream._tools[key]
     if (card && card.acc) {
-      try { card.pre.textContent = JSON.stringify(JSON.parse(card.acc), null, 2) } catch { /* keep raw */ }
+      try { setToolCmd(card, JSON.parse(card.acc)) } catch {
+        const c = partialCmdFromJson(card.acc)
+        if (c) card.cmd.textContent = c
+      }
     }
   }
   if (stream.dataset.text) {
     stream.innerHTML = renderMarkdown(stream.dataset.text)
-  } else if (!stream._think) {
-    // message had no text/thinking (e.g. only a tool call): drop empty bubble
-    const msg = stream.closest('.msg')
-    if (msg) msg.remove()
+  } else if (!stream._think && !Object.keys(stream._tools || {}).length) {
+    // segment had no text/thinking/tool: drop the empty node, keep the turn bubble
+    stream.remove()
   }
   delete stream.dataset.streaming
   stream = null
+  // drop the turn bubble only if it ended up completely empty (e.g. only tool calls)
+  if (turnBubble && turnBubble.isConnected && !turnBubble.querySelector('.think, .tool, .content')) {
+    const msg = turnBubble.closest('.msg')
+    if (msg) msg.remove()
+    turnBubble = null
+  }
 }
 
 function handleEvent(e) {
@@ -513,6 +632,8 @@ function handleEvent(e) {
     case 'run-start':
       running = true
       stream = null
+      turnBubble = null
+      endAllToolRuns()
       renderedText = false
       setStatus('运行中…', 'running')
       $('sendBtn').disabled = true
@@ -549,8 +670,10 @@ function handleEvent(e) {
           if (input == null && card) {
             try { input = JSON.parse(card.acc || '{}') } catch { input = {} }
           }
-          if (card) card.pre.textContent = JSON.stringify(input ?? {}, null, 2)
-          else addToolMsg(tu.name, input || {})
+          if (card) {
+            card.id = card.id || tu.id
+            setToolCmd(card, input ?? {})
+          } else addToolCard(node, tu.name, input || {}, tu.id)
         }
       } else {
         // fallback when stream events were not available
@@ -566,21 +689,43 @@ function handleEvent(e) {
           n.innerHTML = renderMarkdown(text)
           renderedText = true
         }
-        for (const tu of toolUses) addToolMsg(tu.name, tu.input || {})
+        for (const tu of toolUses) addToolCard(getStreamNode(), tu.name, tu.input || {}, tu.id)
+      }
+      break
+    }
+    case 'user': {
+      // user messages carrying tool_result blocks mark tool cards as done
+      const blocks = Array.isArray(e.message?.content) ? e.message.content : []
+      const ids = new Set()
+      for (const b of blocks) if (b && b.type === 'tool_result' && b.tool_use_id) ids.add(b.tool_use_id)
+      if (!ids.size) break
+      for (const card of [...runningTools]) {
+        if (ids.has(card.id)) endToolRun(card)
       }
       break
     }
     case 'result': {
       finishStream()
+      endAllToolRuns()
       const text = e.result || ''
       // result duplicates what we already streamed; only render as fallback
-      if (text && !renderedText) addMsg('assistant', text)
+      if (text && !renderedText) {
+        if (turnBubble && turnBubble.isConnected) {
+          const seg = newSegment(turnBubble)
+          seg.innerHTML = renderMarkdown(text)
+          delete seg.dataset.streaming
+        } else {
+          addMsg('assistant', text)
+        }
+      }
       markAllDone()
       break
     }
     case 'stream_event': {
       const ev = e.event || {}
       if (ev.type === 'message_start') {
+        // a new assistant message implies the previous batch of tools finished
+        endAllToolRuns()
         getStreamNode()
       } else if (ev.type === 'content_block_start') {
         const block = ev.content_block || {}
@@ -588,8 +733,7 @@ function handleEvent(e) {
           ensureThink(getStreamNode())
         } else if (block.type === 'tool_use') {
           const node = getStreamNode()
-          const pre = addToolMsg(block.name || 'tool', {})
-          const card = { name: block.name || 'tool', pre, acc: '' }
+          const card = addToolCard(node, block.name || 'tool', {}, block.id)
           node._tools[ev.index] = card
           node._toolQueue.push(card)
         }
@@ -603,7 +747,12 @@ function handleEvent(e) {
           const card = stream && stream._tools ? stream._tools[ev.index] : null
           if (card) {
             card.acc += d.partial_json || ''
-            card.pre.textContent = card.acc
+            try {
+              setToolCmd(card, JSON.parse(card.acc))
+            } catch {
+              const c = partialCmdFromJson(card.acc)
+              if (c) card.cmd.textContent = c
+            }
             messagesEl.scrollTop = messagesEl.scrollHeight
           }
         }
@@ -630,6 +779,8 @@ function handleEvent(e) {
       break
     case 'run-end': {
       finishStream()
+      endAllToolRuns()
+      turnBubble = null
       running = false
       $('sendBtn').disabled = false
       $('stopBtn').disabled = true
