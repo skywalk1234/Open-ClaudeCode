@@ -476,6 +476,68 @@ function parseTranscriptTurns(file) {
 }
 
 // ---------------------------------------------------------------------------
+// fork-subtree helpers (cascade delete + orphan reconciliation)
+//
+// A conversation tree is stored as flat records linked by `forkedFrom`. Deleting
+// a main conversation must remove its whole branch (children, forks-of-forks,
+// …), otherwise those forks get orphaned and resurface in the top-level list.
+// The same traversal backs the startup reconciliation that cleans up orphans
+// left by earlier versions without cascade delete.
+// ---------------------------------------------------------------------------
+function subtreeRecords(conversations, rootId) {
+  const out = []
+  const seen = new Set()
+  const walk = id => {
+    if (!id || seen.has(id)) return
+    seen.add(id)
+    const rec = conversations.get(id)
+    if (!rec) return
+    out.push(rec)
+    for (const c of conversations.values()) if (c.forkedFrom === id) walk(c.id)
+  }
+  walk(rootId)
+  return out
+}
+
+// Remove transcript files whose session id is no longer referenced by any
+// surviving conversation. Session ids can briefly be shared between a freshly
+// forked conversation and its source (until the CLI reports its own id), so we
+// never delete a file that a kept conversation still points at.
+function unlinkUnreferencedTranscripts(conversations, removedRecords) {
+  const sessionIds = [...new Set(removedRecords.map(r => r.cliSessionId).filter(Boolean))]
+  for (const sid of sessionIds) {
+    const stillUsed = [...conversations.values()].some(x => x.cliSessionId === sid)
+    if (stillUsed) continue
+    const owner = removedRecords.find(r => r.cliSessionId === sid)
+    const file = findTranscriptFile(sid, convProjectDir(owner))
+    if (file) {
+      try {
+        fs.unlinkSync(file)
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+}
+
+// Remove whole branches whose root's parent no longer exists. Such orphans are
+// leftovers of deleting a parent before cascade delete existed; with cascade
+// they can never be created, so any found here is safe to drop. Repeats until
+// a fixpoint because removing an orphan subtree can orphan a deeper one.
+function pruneOrphanSubtrees(conversations) {
+  const removed = []
+  for (;;) {
+    const liveIds = new Set(conversations.keys())
+    const orphan = [...conversations.values()].find(c => c.forkedFrom && !liveIds.has(c.forkedFrom))
+    if (!orphan) break
+    const branch = subtreeRecords(conversations, orphan.id)
+    removed.push(...branch)
+    for (const r of branch) conversations.delete(r.id)
+  }
+  return removed
+}
+
+// ---------------------------------------------------------------------------
 // HTTP + SSE server
 // ---------------------------------------------------------------------------
 function createServer(opts) {
@@ -502,6 +564,16 @@ function createServer(opts) {
     }
   }
   if (stale) saveConversations(conversations)
+
+  // Leftover forks whose parent was deleted before cascade delete existed can
+  // never be shown in the top-level list — drop the orphaned branches (their
+  // records and transcripts) so they do not resurface as fake "main" sessions.
+  const pruned = pruneOrphanSubtrees(conversations)
+  if (pruned.length) {
+    unlinkUnreferencedTranscripts(conversations, pruned)
+    saveConversations(conversations)
+    console.warn(`OPC Web UI: 已清理 ${pruned.length} 个孤儿会话分支（父会话已被删除）`)
+  }
 
   function broadcast(event) {
     eventLog.push(event)
@@ -664,35 +736,22 @@ function createServer(opts) {
       }
     }
 
-    // Delete a conversation (record + its CLI transcript).
+    // Delete a conversation and its whole fork branch (children, forks-of-forks,
+    // …) plus the branch's transcripts. Returning the removed ids lets the UI
+    // drop the view when the active conversation was inside the deleted branch.
     if (req.method === 'DELETE') {
       const m = p.match(/^\/api\/conversations\/([^/]+)$/)
       if (m) {
         const conv = conversations.get(m[1])
         if (!conv) return sendJson(res, 404, { error: 'Conversation not found' })
-        if (conv.running) {
-          return sendJson(res, 409, { error: '该会话正在运行，请先停止。' })
-        }
-        conversations.delete(m[1])
+        const branch = subtreeRecords(conversations, conv.id)
+        const busy = branch.find(r => r.running)
+        if (busy) return sendJson(res, 409, { error: '该会话或其子会话正在运行，请先停止。' })
+        const removed = branch.map(r => r.id)
+        for (const id of removed) conversations.delete(id)
         saveConversations(conversations)
-        // A freshly forked conversation briefly shares its parent's cliSessionId
-        // (until the CLI reports its own new session id). Only unlink the
-        // transcript when THIS conversation is its sole owner — otherwise we'd
-        // destroy history still referenced by the fork source.
-        const owners = [...conversations.values()].filter(
-          x => x.cliSessionId && x.cliSessionId === conv.cliSessionId,
-        )
-        if (!owners.length) {
-          const file = findTranscriptFile(conv.cliSessionId, convProjectDir(conv))
-          if (file) {
-            try {
-              fs.unlinkSync(file)
-            } catch {
-              /* best effort */
-            }
-          }
-        }
-        sendJson(res, 200, { ok: true })
+        unlinkUnreferencedTranscripts(conversations, branch)
+        sendJson(res, 200, { ok: true, removed })
         return
       }
     }

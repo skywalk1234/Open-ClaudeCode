@@ -1243,14 +1243,33 @@ function rootOf(id) {
   return cur ? cur.id : null
 }
 
+// Number of forks hanging under `id` (its direct and deeper descendants — the
+// conversation itself not counted), used to warn about a cascade delete.
+function subtreeCount(id) {
+  let n = 0
+  const stack = [id]
+  while (stack.length) {
+    const cur = stack.pop()
+    for (const c of conversationsCache) {
+      if (c.forkedFrom === cur) {
+        n += 1
+        stack.push(c.id)
+      }
+    }
+  }
+  return n
+}
+
 // The top list shows ONLY main (root) conversations; forks live in the fork
 // graph below, under their main conversation. A fork that is active keeps its
 // main conversation highlighted here.
 function renderSessionList() {
   const list = $('sessionList')
   list.innerHTML = ''
-  const byId = new Map(conversationsCache.map(c => [c.id, c]))
-  const roots = conversationsCache.filter(c => !(c.forkedFrom && byId.has(c.forkedFrom)))
+  // Only main conversations (no forkedFrom) belong in the top list; forks live
+  // in the fork graph under their main. Deleting a main cascades to its whole
+  // branch server-side, so a parent-less fork never surfaces here.
+  const roots = conversationsCache.filter(c => !c.forkedFrom)
   if (!roots.length) {
     list.innerHTML = '<div class="sb-empty">暂无会话</div>'
     return
@@ -1681,18 +1700,26 @@ async function deleteSession(id) {
     return
   }
   const title = (conv.title || '未命名会话').slice(0, 24)
-  if (!confirm('删除会话「' + title + '」？\n会同时删除它的本地记录，无法恢复。')) return
+  const extra = subtreeCount(id) // child forks hanging under this one
+  const msg = extra > 0
+    ? '删除「' + title + '」及其下 ' + extra + ' 个子会话分支？\n全部记录与本地历史无法恢复。'
+    : '删除会话「' + title + '」？\n会同时删除它的本地记录，无法恢复。'
+  if (!confirm(msg)) return
+  let removed = [id]
   try {
     const res = await fetch('/api/conversations/' + encodeURIComponent(id), { method: 'DELETE' })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error || res.statusText)
     }
+    const data = await res.json().catch(() => ({}))
+    if (Array.isArray(data.removed) && data.removed.length) removed = data.removed
   } catch (err) {
     setStatus('删除失败: ' + err.message, 'error')
     return
   }
-  if (conversationId === id) {
+  // The deleted branch may contain the conversation currently open — drop it.
+  if (conversationId && removed.includes(conversationId)) {
     conversationId = null
     chatId = null
     stream = null
