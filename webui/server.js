@@ -417,7 +417,7 @@ function createServer(opts) {
     if (req.method === 'GET' && p === '/api/conversations') {
       const list = [...conversations.values()]
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-        .map(({ id, title, cliSessionId, forkedFrom, createdAt, updatedAt, running }) => ({
+        .map(({ id, title, cliSessionId, forkedFrom, createdAt, updatedAt, running, entryPrompt }) => ({
           id,
           title,
           hasTranscript: Boolean(cliSessionId),
@@ -425,6 +425,7 @@ function createServer(opts) {
           createdAt,
           updatedAt,
           running: Boolean(running),
+          entryPreview: String(entryPrompt || title || '').slice(0, 300),
         }))
       sendJson(res, 200, list)
       return
@@ -460,12 +461,21 @@ function createServer(opts) {
         }
         conversations.delete(m[1])
         saveConversations(conversations)
-        const file = findTranscriptFile(conv.cliSessionId)
-        if (file) {
-          try {
-            fs.unlinkSync(file)
-          } catch {
-            /* best effort */
+        // A freshly forked conversation briefly shares its parent's cliSessionId
+        // (until the CLI reports its own new session id). Only unlink the
+        // transcript when THIS conversation is its sole owner — otherwise we'd
+        // destroy history still referenced by the fork source.
+        const owners = [...conversations.values()].filter(
+          x => x.cliSessionId && x.cliSessionId === conv.cliSessionId,
+        )
+        if (!owners.length) {
+          const file = findTranscriptFile(conv.cliSessionId)
+          if (file) {
+            try {
+              fs.unlinkSync(file)
+            } catch {
+              /* best effort */
+            }
           }
         }
         sendJson(res, 200, { ok: true })
@@ -505,6 +515,7 @@ function createServer(opts) {
           conv = {
             id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
             title: String(body.title || prompt).slice(0, 40),
+            entryPrompt: String(body.entry || prompt).slice(0, 600), // first msg of this branch
             cliSessionId: src.cliSessionId,
             forkedFrom: src.id,
             createdAt: Date.now(),
@@ -524,6 +535,7 @@ function createServer(opts) {
           conv = {
             id: 'conv-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
             title: String(body.title || prompt).slice(0, 40),
+            entryPrompt: String(body.entry || prompt).slice(0, 600), // first msg of this branch
             cliSessionId: null,
             createdAt: Date.now(),
             updatedAt: Date.now(),

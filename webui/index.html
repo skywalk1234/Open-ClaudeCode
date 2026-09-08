@@ -48,7 +48,30 @@
     padding: 12px 12px 8px; font-weight: 700; font-size: 13px;
   }
   .sb-head button { padding: 4px 10px; font-size: 12px; border-radius: 7px; }
-  #sessionList { flex: 1; overflow-y: auto; padding: 2px 8px 12px; }
+  #sessionList { flex: 1 1 46%; min-height: 96px; overflow-y: auto; padding: 0 8px 8px; }
+  .sb-sep { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 10px; }
+  .sb-sub { font-size: 10px; color: var(--muted); font-weight: 600; letter-spacing: .03em; }
+  /* fork graph: a git-graph-like tree of conversations & their forks */
+  #branchGraph { flex: 1 1 54%; min-height: 150px; overflow-y: auto; padding: 0 8px 12px; }
+  .gg-empty { color: var(--muted); font-size: 12px; padding: 6px 10px; }
+  .gg-node .gg-row {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+    padding: 5px 6px; border-radius: 7px; cursor: pointer; font-size: 12px;
+    border: 1px solid transparent;
+  }
+  .gg-node .gg-row:hover { background: var(--panel-2); }
+  .gg-node.active > .gg-row { background: var(--panel-2); border-color: var(--accent); }
+  .gg-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--border-2); }
+  .gg-node .gg-row:hover .gg-dot { background: var(--accent); }
+  .gg-node.active > .gg-row .gg-dot { background: var(--accent); }
+  .gg-node.root > .gg-row .gg-title { font-weight: 600; }
+  .gg-title {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--text);
+  }
+  .gg-node.fork > .gg-row .gg-title::before { content: '↳ '; color: var(--accent-2); }
+  .gg-run { flex: none; font-size: 10px; color: var(--accent); animation: pulse 1.2s infinite; }
+  .gg-children { margin-left: 11px; padding-left: 9px; border-left: 2px solid var(--border); }
   .sess-item {
     padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
     border: 1px solid transparent;
@@ -309,6 +332,22 @@
   }
   #quotePopup .qp-actions { display: flex; gap: 8px; justify-content: flex-end; }
   #quotePopup .qp-actions button { padding: 4px 12px; font-size: 12px; }
+
+  /* fork-graph hover preview: "who is who" first-message peek */
+  #ggTip {
+    position: fixed; z-index: 70; max-width: 300px; display: none;
+    background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 9px;
+    box-shadow: 0 6px 22px rgba(61,57,41,.18); padding: 9px 11px;
+    font-size: 12px; color: var(--text); pointer-events: none;
+  }
+  #ggTip .gt-kind { color: var(--accent-2); font-weight: 700; font-size: 11px; margin-bottom: 4px; }
+  #ggTip .gt-title { font-weight: 600; margin-bottom: 3px; }
+  #ggTip .gt-body {
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 220px; overflow: hidden;
+  }
+  #ggTip .gt-meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
+
   .cursor { display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 </style>
@@ -321,6 +360,8 @@
     <button id="newChatBtn" class="secondary">＋ 新建会话</button>
   </div>
   <div id="sessionList"></div>
+  <div class="sb-head sb-sep"><span class="sb-sub">FORK 图谱</span></div>
+  <div id="branchGraph"><div class="gg-empty">暂无分支</div></div>
 </aside>
 
 <div id="mainCol">
@@ -385,6 +426,8 @@
     <button id="qpAsk">追问</button>
   </div>
 </div>
+
+<div id="ggTip"></div>
 
 <script>
 'use strict'
@@ -902,7 +945,7 @@ async function loadConversations() {
   } catch {
     /* server unreachable — keep the current list */
   }
-  renderSessionList()
+  renderSidebar()
 }
 
 function fmtTime(ts) {
@@ -939,6 +982,122 @@ function renderSessionList() {
   }
 }
 
+// refresh both sidebar regions: the flat conversation list and the fork tree.
+function renderSidebar() {
+  renderSessionList()
+  renderForkGraph()
+}
+
+// ---------------------------------------------------------------------------
+// fork graph: build a forest from conversations + their forkedFrom links.
+// Roots are conversations with no (live) parent; a fork is drawn under its
+// parent as a child node, and forks-of-forks nest recursively.
+// ---------------------------------------------------------------------------
+function buildForest() {
+  const byId = new Map(conversationsCache.map(c => [c.id, c]))
+  const children = new Map() // parentId -> [child conversation]
+  const roots = []
+  for (const c of conversationsCache) {
+    const parent = c.forkedFrom && byId.get(c.forkedFrom)
+    if (parent) {
+      if (!children.has(parent.id)) children.set(parent.id, [])
+      children.get(parent.id).push(c)
+    } else {
+      roots.push(c) // includes orphans whose parent was deleted
+    }
+  }
+  const byTime = (a, b) => (a.createdAt || 0) - (b.createdAt || 0) // top-down = chronological
+  roots.sort(byTime)
+  for (const arr of children.values()) arr.sort(byTime)
+  return { roots, children, byId }
+}
+
+const ggTipEl = $('ggTip')
+let ggTipTimer = null
+
+function showGraphTip(row, conv) {
+  const parent = conv.forkedFrom
+    ? (conversationsCache.find(c => c.id === conv.forkedFrom) || null)
+    : null
+  const kind = parent
+    ? '分支 · fork 自「' + (parent.title || '未命名') + '」'
+    : (conv.forkedFrom ? '分支（父会话已删除）' : '主对话')
+  const body = conv.entryPreview && conv.entryPreview.trim()
+    ? conv.entryPreview
+    : '（暂无第一条消息内容）'
+  ggTipEl.innerHTML =
+    '<div class="gt-kind">' + esc(kind) + '</div>' +
+    '<div class="gt-title">' + esc(conv.title || '未命名会话') + '</div>' +
+    '<div class="gt-body">' + esc(body) + '</div>' +
+    '<div class="gt-meta">更新于 ' + esc(fmtTime(conv.updatedAt)) + '</div>'
+  ggTipEl.style.display = 'block'
+  const rect = row.getBoundingClientRect()
+  const tw = ggTipEl.offsetWidth || 280
+  const th = ggTipEl.offsetHeight || 80
+  let left = rect.left + 4
+  if (left + tw > window.innerWidth - 8) left = Math.max(8, rect.right - tw - 4)
+  let top = rect.bottom + 6
+  if (top + th > window.innerHeight - 8) top = Math.max(8, rect.top - th - 6)
+  ggTipEl.style.left = left + 'px'
+  ggTipEl.style.top = top + 'px'
+}
+
+function hideGraphTip() {
+  clearTimeout(ggTipTimer)
+  ggTipEl.style.display = 'none'
+}
+
+function hideGraphTipSoon() {
+  clearTimeout(ggTipTimer)
+  ggTipTimer = setTimeout(() => { ggTipEl.style.display = 'none' }, 120)
+}
+
+function appendGraphNode(hostEl, conv, children, isRoot) {
+  const wrap = document.createElement('div')
+  wrap.className = 'gg-node' + (conv.id === conversationId ? ' active' : '') +
+    (isRoot ? ' root' : ' fork')
+  wrap.dataset.id = conv.id
+  const row = document.createElement('div')
+  row.className = 'gg-row'
+  row.innerHTML =
+    '<span class="gg-dot"></span>' +
+    '<span class="gg-title">' + esc(conv.title || '未命名会话') + '</span>' +
+    (conv.running ? '<span class="gg-run">运行中</span>' : '')
+  wrap.appendChild(row)
+  hostEl.appendChild(wrap)
+
+  row.addEventListener('click', () => switchConversation(conv.id))
+  row.addEventListener('mouseenter', () => {
+    clearTimeout(ggTipTimer)
+    ggTipTimer = setTimeout(() => showGraphTip(row, conv), 220)
+  })
+  row.addEventListener('mouseleave', hideGraphTipSoon)
+
+  let count = 1
+  const kids = children.get(conv.id)
+  if (kids && kids.length) {
+    const ctr = document.createElement('div')
+    ctr.className = 'gg-children'
+    for (const k of kids) count += appendGraphNode(ctr, k, children, false)
+    wrap.appendChild(ctr)
+  }
+  return count
+}
+
+function renderForkGraph() {
+  hideGraphTip()
+  const host = $('branchGraph')
+  host.innerHTML = ''
+  const { roots, children } = buildForest()
+  if (!roots.length) {
+    host.innerHTML = '<div class="gg-empty">暂无分支</div>'
+    return
+  }
+  let nodes = 0
+  for (const r of roots) nodes += appendGraphNode(host, r, children, true)
+  if (!nodes) host.innerHTML = '<div class="gg-empty">暂无分支</div>'
+}
+
 function resetChatArea(note) {
   messagesEl.innerHTML =
     '<div class="empty" id="emptyState"><h2>' +
@@ -956,13 +1115,14 @@ async function switchConversation(id) {
   }
   if (id === conversationId) return
   hideQuotePopup()
+  hideGraphTip()
   const conv = conversationsCache.find(c => c.id === id)
   conversationId = id
   chatId = null
   stream = null
   turnBubble = null
   endAllToolRuns()
-  renderSessionList()
+  renderSidebar()
   messagesEl.innerHTML = '<div class="empty" id="emptyState"><h2>加载中…</h2></div>'
   setStatus('空闲', 'idle')
   try {
@@ -1034,13 +1194,14 @@ function newConversation() {
     return
   }
   hideQuotePopup()
+  hideGraphTip()
   conversationId = null
   chatId = null
   stream = null
   turnBubble = null
   endAllToolRuns()
   resetChatArea()
-  renderSessionList()
+  renderSidebar()
   setStatus('空闲', 'idle')
   $('promptInput').focus()
 }
@@ -1112,13 +1273,14 @@ async function submitQuoteQuestion() {
   endAllToolRuns()
   resetChatArea()
   addMsg('user', prompt)
-  renderSessionList()
+  renderSidebar()
   try {
     const data = await post('/api/chat', {
       chatId,
       forkFrom: sourceConv,
       title: question,
       prompt,
+      entry: question,
       cwd: $('cwdInput').value.trim() || undefined,
       model: $('modelSel').value || undefined,
       permissionMode: $('permSel').value,
@@ -1191,6 +1353,7 @@ async function sendMessage() {
   const body = {
     chatId,
     prompt,
+    entry: prompt,
     cwd,
     model: $('modelSel').value || undefined,
     permissionMode: $('permSel').value,
